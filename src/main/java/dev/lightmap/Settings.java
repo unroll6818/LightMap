@@ -29,6 +29,7 @@ public final class Settings {
     public static final String OPACITY = "lightmap.minimap.opacity";
     public static final String SIZE = "lightmap.minimap.size";
     public static final String ROTATE = "lightmap.minimap.rotate";
+    public static final String DISTINCT_MARKERS = "lightmap.minimap.markers.distinct";
 
     public static final int SIZE_MIN = 64;
     public static final int SIZE_MAX = 1024;
@@ -41,6 +42,7 @@ public final class Settings {
     private static int opacity = 100;
     private static int size = 368;
     private static boolean rotate = true;
+    private static boolean distinctMarkers = true;
     private static Path file;
 
     private Settings() {
@@ -64,6 +66,15 @@ public final class Settings {
     /** Turn the minimap so the view direction is up; otherwise north is up. */
     public static boolean rotate() {
         return rotate;
+    }
+
+    /** Draw minimap markers larger and outlined; otherwise small and plain. */
+    public static boolean distinctMarkers() {
+        return distinctMarkers;
+    }
+
+    public static void setDistinctMarkers(boolean value) {
+        distinctMarkers = value;
     }
 
     public static void setMinimap(boolean value) {
@@ -103,6 +114,7 @@ public final class Settings {
         setOpacity(integer(stored, OPACITY, 100));
         setSize(integer(stored, SIZE, 368));
         setRotate(flag(stored, ROTATE, true));
+        setDistinctMarkers(flag(stored, DISTINCT_MARKERS, true));
     }
 
     /**
@@ -127,6 +139,7 @@ public final class Settings {
         put(out, previous, OPACITY, Integer.toString(opacity));
         put(out, previous, SIZE, Integer.toString(size));
         put(out, previous, ROTATE, Boolean.toString(rotate));
+        put(out, previous, DISTINCT_MARKERS, Boolean.toString(distinctMarkers));
         try {
             Files.createDirectories(target.toAbsolutePath().getParent());
             Path temp = target.resolveSibling(target.getFileName() + ".tmp");

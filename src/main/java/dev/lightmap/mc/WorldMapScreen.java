@@ -23,7 +23,8 @@ import java.util.Arrays;
 
 /**
  * The full-screen map: the same pages the minimap draws, north up. Hold the left or middle mouse
- * button and drag to move it, scroll to zoom, right-click to add a named marker or change one.
+ * button and drag to move it, scroll to zoom, right-click to add a named marker or change one,
+ * left-click a marker to remove it.
  *
  * <p>Regions that were recorded earlier and are no longer in memory are loaded from disk as they
  * scroll into view.
@@ -31,6 +32,8 @@ import java.util.Arrays;
 public final class WorldMapScreen extends Screen {
     private static final float MIN_ZOOM = 0.5f;
     private static final float MAX_ZOOM = 16f;
+    /** Pointer travel, in screen pixels, up to which a press and release still counts as a click. */
+    private static final float CLICK_SLOP = 3f;
 
     private final MapView view = new MapView();
     private final MapQuad background = new MapQuad();
@@ -49,6 +52,18 @@ public final class WorldMapScreen extends Screen {
      * holding the key down sends repeats, which must not flip the screen shut again.
      */
     private boolean closeOnKey;
+    /**
+     * The button that was pressed on this screen and is moving the map, or -1. The game's own
+     * "a button is held" state cannot be trusted for this: it is set by any press anywhere, such
+     * as the click that joined the world, and is only cleared by a release the game sees, which
+     * it does not when the pointer was captured for play in between. So only a press that this
+     * screen received starts a drag.
+     */
+    private int dragButton = -1;
+    /** How far the pointer has travelled since the press, in GUI units, to tell a click from a drag. */
+    private double dragTravel;
+    /** The marker under the pointer when the left button went down, if any. */
+    private Markers.@Nullable Marker pressedMarker;
 
     public WorldMapScreen() {
         super(Component.translatable("lightmap.world_map"));
@@ -57,6 +72,8 @@ public final class WorldMapScreen extends Screen {
     @Override
     protected void init() {
         area = new ScreenRectangle(0, 0, width, height);
+        dragButton = -1;
+        pressedMarker = null;
         if (!placed) {
             Entity camera = minecraft.getCameraEntity();
             if (camera != null) {
@@ -165,15 +182,42 @@ public final class WorldMapScreen extends Screen {
 
     /**
      * A right click opens the marker dialog: for the marker under the pointer if there is one,
-     * otherwise for a new marker on the block under the pointer.
+     * otherwise for a new marker on the block under the pointer. The left or middle button starts
+     * moving the map; what a left press on a marker means is decided when it is let go.
      */
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
         MarkerScreen dialog = markerDialog(event);
         if (dialog != null) {
             minecraft.gui.setScreen(dialog);
+        } else if (event.button() == InputConstants.MOUSE_BUTTON_LEFT || event.button() == InputConstants.MOUSE_BUTTON_MIDDLE) {
+            dragButton = event.button();
+            dragTravel = 0;
+            MapSession session = LightMapClient.session();
+            pressedMarker = session != null && event.button() == InputConstants.MOUSE_BUTTON_LEFT
+                    ? markerAt(session, event.x(), event.y()) : null;
         }
         // The screen has no widgets; taking the click keeps anything else from acting on it.
+        return true;
+    }
+
+    /**
+     * Letting the left button go on the marker it was pressed on, without having moved the map,
+     * removes that marker.
+     */
+    @Override
+    public boolean mouseReleased(MouseButtonEvent event) {
+        if (event.button() == dragButton) {
+            Markers.Marker pressed = pressedMarker;
+            MapSession session = LightMapClient.session();
+            if (pressed != null && session != null && dragTravel <= CLICK_SLOP / guiScale()
+                    && markerAt(session, event.x(), event.y()) == pressed) {
+                session.markers.replace(pressed, null);
+                session.markersChanged();
+            }
+            dragButton = -1;
+            pressedMarker = null;
+        }
         return true;
     }
 
@@ -211,13 +255,16 @@ public final class WorldMapScreen extends Screen {
         return best;
     }
 
-    /** Holding the left or middle mouse button and moving the pointer moves the map with it. */
+    /**
+     * Holding the left or middle mouse button and moving the pointer moves the map with it. The
+     * right button places markers and does not move the map.
+     */
     @Override
     public boolean mouseDragged(MouseButtonEvent event, double dx, double dy) {
-        if (event.button() == InputConstants.MOUSE_BUTTON_RIGHT) {
-            // The right button places markers; it does not move the map.
+        if (dragButton == -1 || event.button() != dragButton) {
             return true;
         }
+        dragTravel += Math.abs(dx) + Math.abs(dy);
         float scale = zoom / guiScale();
         centreX -= dx / scale;
         centreZ -= dy / scale;

@@ -55,7 +55,14 @@ public final class SodiumOptions implements ConfigEntryPoint {
                                         .setStorageHandler(save)
                                         .setBinding(Settings::setRotate, Settings::rotate)
                                         .setDefaultValue(true)
-                                        .setEnabled(!Settings.pinned(Settings.ROTATE)))));
+                                        .setEnabled(!Settings.pinned(Settings.ROTATE)))
+                                .addOption(builder.createBooleanOption(id("minimap.distinct_markers"))
+                                        .setName(Component.translatable("lightmap.options.minimap.distinct_markers"))
+                                        .setTooltip(Component.translatable("lightmap.options.minimap.distinct_markers.tooltip"))
+                                        .setStorageHandler(save)
+                                        .setBinding(Settings::setDistinctMarkers, Settings::distinctMarkers)
+                                        .setDefaultValue(true)
+                                        .setEnabled(!Settings.pinned(Settings.DISTINCT_MARKERS)))));
     }
 
     private static Identifier id(String path) {

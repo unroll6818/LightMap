@@ -17,14 +17,22 @@ import java.util.List;
  *
  * <p>Markers are kept in their own small text file, apart from the region files, so the region
  * format is untouched. The file starts with a version line; each further line is one marker:
- * {@code x<TAB>z<TAB>shown on the minimap (0 or 1)<TAB>name}.
+ * {@code x<TAB>z<TAB>flags<TAB>name}, where flags is 1 for "shown on the minimap" plus 2 for
+ * "name shown on the minimap". Version 1 files, which only knew 0 and 1, are still read.
  */
 public final class Markers {
     public static final int MAX_NAME = 32;
-    private static final String HEADER = "lightmap-markers 1";
+    private static final String HEADER = "lightmap-markers 2";
+    private static final String HEADER_V1 = "lightmap-markers 1";
 
-    /** A marker at a block column. */
-    public record Marker(int x, int z, String name, boolean onMinimap) {
+    /**
+     * A marker at a block column. {@code nameOnMinimap} only matters for a marker that is on the
+     * minimap at all.
+     */
+    public record Marker(int x, int z, String name, boolean onMinimap, boolean nameOnMinimap) {
+        public Marker(int x, int z, String name, boolean onMinimap) {
+            this(x, z, name, onMinimap, false);
+        }
     }
 
     private volatile Marker[] all = new Marker[0];
@@ -67,7 +75,7 @@ public final class Markers {
     public static byte[] encode(Marker[] markers) {
         StringBuilder out = new StringBuilder(HEADER).append('\n');
         for (Marker m : markers) {
-            out.append(m.x()).append('\t').append(m.z()).append('\t').append(m.onMinimap() ? '1' : '0').append('\t');
+            out.append(m.x()).append('\t').append(m.z()).append('\t').append((m.onMinimap() ? 1 : 0) | (m.nameOnMinimap() ? 2 : 0)).append('\t');
             for (int i = 0; i < m.name().length(); i++) {
                 char c = m.name().charAt(i);
                 switch (c) {
@@ -87,21 +95,24 @@ public final class Markers {
      * Reads a marker file. A line that cannot be read is skipped rather than costing the player
      * every other marker.
      *
-     * @throws IOException if the file is not a marker file of this version
+     * @throws IOException if the file is not a marker file of a known version
      */
     public static List<Marker> decode(byte[] data) throws IOException {
         BufferedReader in = new BufferedReader(new StringReader(new String(data, StandardCharsets.UTF_8)));
-        if (!HEADER.equals(in.readLine())) {
-            throw new IOException("not a LightMap marker file of version 1");
+        String header = in.readLine();
+        if (!HEADER.equals(header) && !HEADER_V1.equals(header)) {
+            throw new IOException("not a LightMap marker file of version 1 or 2");
         }
+        int maxFlags = HEADER.equals(header) ? 3 : 1;
         List<Marker> markers = new ArrayList<>();
         for (String line; (line = in.readLine()) != null; ) {
             String[] parts = line.split("\t", 4);
-            if (parts.length != 4 || !(parts[2].equals("0") || parts[2].equals("1"))) {
+            if (parts.length != 4 || parts[2].length() != 1 || parts[2].charAt(0) < '0' || parts[2].charAt(0) > '0' + maxFlags) {
                 continue;
             }
+            int flags = parts[2].charAt(0) - '0';
             try {
-                markers.add(new Marker(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), unescape(parts[3]), parts[2].equals("1")));
+                markers.add(new Marker(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), unescape(parts[3]), (flags & 1) != 0, (flags & 2) != 0));
             } catch (NumberFormatException ignored) {
                 // Skipped, as above.
             }

@@ -13,7 +13,7 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The dialog a right click on the world map opens: a name, whether the marker also shows on the
- * minimap, and Done or Cancel. For an existing marker there is also Delete. Every way out goes back
+ * minimap, whether its name does too, and Done or Cancel. For an existing marker there is also Delete. Every way out goes back
  * to the world map as it was.
  */
 final class MarkerScreen extends Screen {
@@ -26,6 +26,7 @@ final class MarkerScreen extends Screen {
     // Kept here rather than read from the widgets, so a resize (which rebuilds them) loses nothing.
     private String name;
     private boolean onMinimap;
+    private boolean nameOnMinimap;
     private Button done;
 
     MarkerScreen(WorldMapScreen map, MapSession session, Markers.@Nullable Marker existing, int x, int z) {
@@ -37,12 +38,13 @@ final class MarkerScreen extends Screen {
         this.z = z;
         this.name = existing == null ? "" : existing.name();
         this.onMinimap = existing == null || existing.onMinimap();
+        this.nameOnMinimap = existing != null && existing.nameOnMinimap();
     }
 
     @Override
     protected void init() {
         int left = width / 2 - 100;
-        int top = height / 2 - 40;
+        int top = top();
         EditBox field = new EditBox(font, left, top, 200, 20, Component.translatable("lightmap.marker.name"));
         field.setMaxLength(Markers.MAX_NAME);
         field.setValue(name);
@@ -52,20 +54,28 @@ final class MarkerScreen extends Screen {
             done.active = !value.isBlank();
         });
         addRenderableWidget(field);
+        // The name can only show where the marker does, so the second box follows the first.
+        Checkbox nameBox = Checkbox.builder(Component.translatable("lightmap.marker.minimap_name"), font)
+                .pos(left, top + 48).selected(nameOnMinimap).onValueChange((box, value) -> nameOnMinimap = value).build();
+        nameBox.active = onMinimap;
         addRenderableWidget(Checkbox.builder(Component.translatable("lightmap.marker.minimap"), font)
-                .pos(left, top + 26).selected(onMinimap).onValueChange((box, value) -> onMinimap = value).build());
+                .pos(left, top + 26).selected(onMinimap).onValueChange((box, value) -> {
+                    onMinimap = value;
+                    nameBox.active = value;
+                }).build());
+        addRenderableWidget(nameBox);
         done = addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, button -> {
             commit();
             onClose();
-        }).bounds(left, top + 52, 98, 20).build());
+        }).bounds(left, top + 74, 98, 20).build());
         done.active = !name.isBlank();
-        addRenderableWidget(Button.builder(CommonComponents.GUI_CANCEL, button -> onClose()).bounds(left + 102, top + 52, 98, 20).build());
+        addRenderableWidget(Button.builder(CommonComponents.GUI_CANCEL, button -> onClose()).bounds(left + 102, top + 74, 98, 20).build());
         if (existing != null) {
             addRenderableWidget(Button.builder(Component.translatable("lightmap.marker.delete"), button -> {
                 remove();
                 onClose();
             })
-                    .bounds(left, top + 76, 200, 20).build());
+                    .bounds(left, top + 98, 200, 20).build());
         }
         setInitialFocus(field);
     }
@@ -73,7 +83,11 @@ final class MarkerScreen extends Screen {
     @Override
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partial) {
         super.extractRenderState(graphics, mouseX, mouseY, partial);
-        graphics.centeredText(font, title, width / 2, height / 2 - 40 - font.lineHeight - 6, 0xFFFFFFFF);
+        graphics.centeredText(font, title, width / 2, top() - font.lineHeight - 6, 0xFFFFFFFF);
+    }
+
+    private int top() {
+        return height / 2 - 52;
     }
 
     /** Enter in the name field is as good as Done. */
@@ -92,7 +106,7 @@ final class MarkerScreen extends Screen {
         if (name.isBlank()) {
             return;
         }
-        Markers.Marker marker = new Markers.Marker(x, z, name.strip(), onMinimap);
+        Markers.Marker marker = new Markers.Marker(x, z, name.strip(), onMinimap, onMinimap && nameOnMinimap);
         if (existing == null) {
             session.markers.add(marker);
         } else {
