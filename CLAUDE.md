@@ -1,8 +1,13 @@
 # LightMap
 
 A lightweight minimap and world map for Minecraft 26.3 (Fabric, client-side), written as a
-performance-first alternative to Xaero's Minimap / World Map. README.md describes the design,
-settings and layout; read it before changing anything.
+performance-first alternative to Xaero's Minimap / World Map. `docs/TECHNICAL.md` describes the
+design, settings and layout; read it before changing anything.
+
+`README.md` is the front page for players and is written by the owner. Do not edit it, even where
+an instruction says to update the README: technical documentation goes in `docs/TECHNICAL.md`,
+which is the file to update when behaviour or settings change. If a change makes the front page
+wrong, say so in the pull request.
 
 ## Rules that do not bend
 
