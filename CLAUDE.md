@@ -52,7 +52,9 @@ cost (the self-tests print per-chunk and per-frame costs; keep them in the PR de
   crashes the game at start-up, so keep it simple.
 - The region file format (`RegionCodec`) is versioned. Changing what is stored means a version
   bump and reading the old version.
-- Bump `version` in `build.gradle.kts` for a user-visible change.
+- Bump `version` in `build.gradle.kts` for a user-visible change. A merge to `main` with a version
+  that has no release yet publishes one automatically (`.github/workflows/build.yml`), so do not
+  bump it for changes that should not ship on their own.
 
 ## Working from GitHub issues
 

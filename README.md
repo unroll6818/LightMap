@@ -23,6 +23,9 @@ instead, pass `-PsodiumJar=<path to any Sodium 0.9.3 jar for 26.3>`.
 At run time it needs Fabric API (modules `fabric-lifecycle-events-v1`, `fabric-rendering-v1`,
 `fabric-key-mapping-api-v1`). Sodium is optional.
 
+Releases are built by GitHub Actions: every push to `main` is built and tested, and a version in
+`build.gradle.kts` that has no release yet is published as `v<version>` with the jar attached.
+
 ## Using it
 
 - **Minimap:** top-left corner, turns with the view, an arrow for the player.
