@@ -1,8 +1,10 @@
 package dev.lightmap.mc;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import dev.lightmap.Config;
 import dev.lightmap.LightMapClient;
 import dev.lightmap.core.MapView;
+import dev.lightmap.core.Markers;
 import dev.lightmap.core.RegionPage;
 import dev.lightmap.core.Regions;
 import dev.lightmap.mixin.GuiGraphicsExtractorAccessor;
@@ -15,12 +17,13 @@ import net.minecraft.client.renderer.state.gui.GuiRenderState;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Arrays;
 
 /**
- * The full-screen map: the same pages the minimap draws, north up. Hold a mouse button and drag to move it,
- * scroll to zoom.
+ * The full-screen map: the same pages the minimap draws, north up. Hold the left or middle mouse
+ * button and drag to move it, scroll to zoom, right-click to add a named marker or change one.
  *
  * <p>Regions that were recorded earlier and are no longer in memory are loaded from disk as they
  * scroll into view.
@@ -33,6 +36,7 @@ public final class WorldMapScreen extends Screen {
     private final MapQuad background = new MapQuad();
     private final MapQuad marker = new MapQuad();
     private MapQuad[] pageQuads = new MapQuad[0];
+    private MapQuad[] markerQuads = new MapQuad[0];
     private ScreenRectangle area = ScreenRectangle.empty();
 
     private boolean placed;
@@ -74,6 +78,28 @@ public final class WorldMapScreen extends Screen {
     @Override
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partial) {
         submit(((GuiGraphicsExtractorAccessor) graphics).lightmap$guiRenderState(), partial);
+        labels(graphics);
+    }
+
+    /**
+     * The markers' names, above their squares. Text goes through the game's own text drawing,
+     * which allocates a little per name; that is only while this screen is open.
+     */
+    private void labels(GuiGraphicsExtractor graphics) {
+        MapSession session = LightMapClient.session();
+        if (session == null) {
+            return;
+        }
+        float half = markerHalf();
+        for (Markers.Marker m : session.markers.all()) {
+            float sx = view.screenX(m.x() + 0.5, m.z() + 0.5);
+            float sy = view.screenY(m.x() + 0.5, m.z() + 0.5);
+            if (sx < -100 || sx > width + 100 || sy < 0 || sy > height + font.lineHeight) {
+                continue;
+            }
+            graphics.text(font, m.name(), Math.round(sx) - font.width(m.name()) / 2,
+                    Math.round(sy - half) - font.lineHeight - 1, 0xFFFFFFFF, true);
+        }
     }
 
     /** Adds this frame's quads to the GUI render state. */
@@ -114,6 +140,20 @@ public final class WorldMapScreen extends Screen {
             }
         }
 
+        float half = markerHalf();
+        int dots = 0;
+        for (Markers.Marker m : session.markers.all()) {
+            float sx = view.screenX(m.x() + 0.5, m.z() + 0.5);
+            float sy = view.screenY(m.x() + 0.5, m.z() + 0.5);
+            if (sx + half < 0 || sx - half > width || sy + half < 0 || sy - half > height) {
+                continue;
+            }
+            markerQuads = MapQuad.pool(markerQuads, dots);
+            MapQuad dot = markerQuads[dots++];
+            dot.dot(sx, sy, half, MinimapHud.PLACED_MARKER, null, area);
+            state.addGlyphToCurrentLayer(dot);
+        }
+
         Entity camera = minecraft.getCameraEntity();
         if (camera != null && camera.level() == session.level) {
             float heading = camera.getViewYRot(partial) * Mth.DEG_TO_RAD;
@@ -123,15 +163,61 @@ public final class WorldMapScreen extends Screen {
         }
     }
 
+    /**
+     * A right click opens the marker dialog: for the marker under the pointer if there is one,
+     * otherwise for a new marker on the block under the pointer.
+     */
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+        MarkerScreen dialog = markerDialog(event);
+        if (dialog != null) {
+            minecraft.gui.setScreen(dialog);
+        }
         // The screen has no widgets; taking the click keeps anything else from acting on it.
         return true;
     }
 
-    /** Holding any mouse button and moving the pointer moves the map with it. */
+    /** The marker dialog a click opens, or null if it opens none. */
+    @Nullable MarkerScreen markerDialog(MouseButtonEvent event) {
+        MapSession session = LightMapClient.session();
+        if (event.button() != InputConstants.MOUSE_BUTTON_RIGHT || session == null) {
+            return null;
+        }
+        Markers.Marker hit = markerAt(session, event.x(), event.y());
+        if (hit != null) {
+            return new MarkerScreen(this, session, hit, hit.x(), hit.z());
+        }
+        float scale = zoom / guiScale();
+        int x = Mth.floor(centreX + (event.x() - width * 0.5) / scale);
+        int z = Mth.floor(centreZ + (event.y() - height * 0.5) / scale);
+        return new MarkerScreen(this, session, null, x, z);
+    }
+
+    /** The marker whose square is under a screen position, give or take a little, or null. */
+    Markers.@Nullable Marker markerAt(MapSession session, double x, double y) {
+        float scale = zoom / guiScale();
+        double reach = markerHalf() + 2.0 / guiScale();
+        Markers.Marker best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (Markers.Marker m : session.markers.all()) {
+            double dx = width * 0.5 + (m.x() + 0.5 - centreX) * scale - x;
+            double dy = height * 0.5 + (m.z() + 0.5 - centreZ) * scale - y;
+            double distance = Math.max(Math.abs(dx), Math.abs(dy));
+            if (distance <= reach && distance < bestDistance) {
+                best = m;
+                bestDistance = distance;
+            }
+        }
+        return best;
+    }
+
+    /** Holding the left or middle mouse button and moving the pointer moves the map with it. */
     @Override
     public boolean mouseDragged(MouseButtonEvent event, double dx, double dy) {
+        if (event.button() == InputConstants.MOUSE_BUTTON_RIGHT) {
+            // The right button places markers; it does not move the map.
+            return true;
+        }
         float scale = zoom / guiScale();
         centreX -= dx / scale;
         centreZ -= dy / scale;
@@ -186,6 +272,11 @@ public final class WorldMapScreen extends Screen {
         long across = (long) Math.ceil(width / scale / Regions.SIZE) + 1;
         long down = (long) Math.ceil(height / scale / Regions.SIZE) + 1;
         return across * down <= Config.MAX_PAGES * 3L / 4;
+    }
+
+    /** Half the side of a marker's square, in GUI units: a few screen pixels at any GUI scale. */
+    private float markerHalf() {
+        return 4f / guiScale();
     }
 
     private int guiScale() {

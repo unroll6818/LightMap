@@ -41,6 +41,7 @@ public final class CoreTests {
         Check.run("store: memory-only mode never touches the disk", CoreTests::memoryOnly);
         Check.run("worker: tasks run in order and upkeep runs between them", CoreTests::worker);
         Check.run("settings: defaults, clamping, save and reload, broken files", CoreTests::settings);
+        Check.run("markers: add, change, remove, file round-trip and broken lines", CoreTests::markers);
         Check.finish();
     }
 
@@ -621,6 +622,52 @@ public final class CoreTests {
             Check.that(upkeep.get() > 0, "upkeep ran");
         } finally {
             worker.shutdown();
+        }
+    }
+
+    private static void markers() throws Exception {
+        Markers markers = new Markers();
+        Markers.Marker home = new Markers.Marker(-120, 340, "Home", true);
+        Markers.Marker odd = new Markers.Marker(7, -8, "tab\there \\ back\nslash é", false);
+        markers.add(home);
+        markers.add(odd);
+        Markers.Marker[] before = markers.all();
+        Check.eq(List.of(home, odd), List.of(before), "added in order");
+
+        Markers.Marker renamed = new Markers.Marker(-120, 340, "Base", false);
+        markers.replace(home, renamed);
+        Check.eq(List.of(renamed, odd), List.of(markers.all()), "changed in place");
+        Check.eq(List.of(home, odd), List.of(before), "an earlier snapshot is never changed");
+        markers.replace(home, null);
+        Check.eq(2, markers.all().length, "replacing a marker that is gone does nothing");
+        markers.replace(renamed, null);
+        Check.eq(List.of(odd), List.of(markers.all()), "removed");
+
+        // Markers read from disk go in front of one placed while the read was still running.
+        markers.addLoaded(List.of(home));
+        Check.eq(List.of(home, odd), List.of(markers.all()), "loaded markers first");
+
+        // The file keeps every field, including names with tabs, newlines and backslashes.
+        Path dir = Files.createTempDirectory("lightmap-markers-test");
+        RegionFiles files = new RegionFiles(dir.resolve("world"));
+        Check.eq(null, files.readMarkers(), "no file yet");
+        files.writeMarkers(Markers.encode(markers.all()));
+        Check.eq(List.of(home, odd), Markers.decode(files.readMarkers()), "file round-trip");
+        Check.eq(0, files.list().length, "the marker file is not taken for a region");
+        Check.eq(List.of(), Markers.decode(Markers.encode(new Markers.Marker[0])), "empty list round-trip");
+
+        // A damaged line costs only that marker; a foreign file is refused.
+        String damaged = "lightmap-markers 1\n1\t2\t1\tGood\nx\t2\t1\tBad number\n3\t4\tyes\tBad flag\n5\t6\n\n7\t8\t0\tAlso\tgood\n";
+        Check.eq(List.of(new Markers.Marker(1, 2, "Good", true), new Markers.Marker(7, 8, "Also\tgood", false)),
+                Markers.decode(damaged.getBytes(java.nio.charset.StandardCharsets.UTF_8)), "damaged lines are skipped");
+        for (String foreign : new String[] {"", "lightmap-markers 2\n1\t2\t1\tA\n", "hello\n"}) {
+            boolean refused = false;
+            try {
+                Markers.decode(foreign.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            } catch (IOException e) {
+                refused = true;
+            }
+            Check.that(refused, "refuses " + foreign.replace("\n", "|"));
         }
     }
 

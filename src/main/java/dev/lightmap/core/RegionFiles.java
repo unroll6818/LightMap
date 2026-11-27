@@ -10,10 +10,14 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 
-/** The region files of one world and dimension: {@code r.<x>.<z>.lmap} in a single directory. */
+/**
+ * The files of one world and dimension, in a single directory: a {@code r.<x>.<z>.lmap} per region
+ * and {@code markers.txt} for the player's markers.
+ */
 public final class RegionFiles {
     private static final String PREFIX = "r.";
     private static final String SUFFIX = ".lmap";
+    private static final String MARKERS = "markers.txt";
 
     private final Path dir;
 
@@ -59,8 +63,24 @@ public final class RegionFiles {
 
     /** Writes through a temporary file so a crash or a concurrent reader never sees half a region. */
     public void write(long key, byte[] data) throws IOException {
+        writeAtomically(path(key), data);
+    }
+
+    /** @return the marker file's bytes, or null if there is none */
+    public byte[] readMarkers() throws IOException {
+        try {
+            return Files.readAllBytes(dir.resolve(MARKERS));
+        } catch (NoSuchFileException e) {
+            return null;
+        }
+    }
+
+    public void writeMarkers(byte[] data) throws IOException {
+        writeAtomically(dir.resolve(MARKERS), data);
+    }
+
+    private void writeAtomically(Path target, byte[] data) throws IOException {
         Files.createDirectories(dir);
-        Path target = path(key);
         Path temp = target.resolveSibling(target.getFileName() + ".tmp");
         Files.write(temp, data);
         try {

@@ -3,6 +3,7 @@ package dev.lightmap.mc;
 import dev.lightmap.Config;
 import dev.lightmap.core.ChunkColumns;
 import dev.lightmap.core.MapWorker;
+import dev.lightmap.core.Markers;
 import dev.lightmap.core.PageStore;
 import dev.lightmap.core.RegionFiles;
 import dev.lightmap.core.RegionPage;
@@ -23,6 +24,7 @@ import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.nio.file.Path;
 
 /**
@@ -43,7 +45,10 @@ public final class MapSession {
     public final ClientLevel level;
     /** Shared with the store: the client thread and the worker each write only their own counters. */
     public final Stats stats;
+    /** The player's markers; changed on the client thread, see {@link #markersChanged()}. */
+    public final Markers markers = new Markers();
     private final PageStore store;
+    private final RegionFiles files;
     private final MapWorker worker;
 
     // Client thread.
@@ -58,8 +63,9 @@ public final class MapSession {
     private final ChunkColumns columns = new ChunkColumns();
     private StateTables tables;
 
-    private MapSession(ClientLevel level, PageStore store, MapWorker worker) {
+    private MapSession(ClientLevel level, RegionFiles files, PageStore store, MapWorker worker) {
         this.level = level;
+        this.files = files;
         this.store = store;
         this.stats = store.stats;
         this.worker = worker;
@@ -68,7 +74,7 @@ public final class MapSession {
 
     public static MapSession open(Minecraft minecraft, ClientLevel level, MapWorker worker) {
         RegionFiles files = Config.PERSIST ? new RegionFiles(directory(minecraft, level)) : null;
-        MapSession session = new MapSession(level, new PageStore(files, Config.MAX_PAGES, new Stats()), worker);
+        MapSession session = new MapSession(level, files, new PageStore(files, Config.MAX_PAGES, new Stats()), worker);
         worker.submit(session::openOnWorker);
         worker.setIdle(() -> session.store.idle(System.nanoTime()));
         return session;
@@ -113,6 +119,32 @@ public final class MapSession {
         } catch (RuntimeException e) {
             LOG.error("[lightmap] could not set up the map for this world; nothing will be recorded", e);
         }
+        loadMarkersOnWorker();
+    }
+
+    private void loadMarkersOnWorker() {
+        if (files == null) {
+            return;
+        }
+        try {
+            byte[] data = files.readMarkers();
+            if (data != null) {
+                markers.addLoaded(Markers.decode(data));
+            }
+        } catch (IOException | RuntimeException e) {
+            LOG.warn("[lightmap] could not read the markers in {}", files.dir(), e);
+        }
+    }
+
+    private void saveMarkersOnWorker() {
+        if (files == null) {
+            return;
+        }
+        try {
+            files.writeMarkers(Markers.encode(markers.all()));
+        } catch (IOException | RuntimeException e) {
+            LOG.warn("[lightmap] could not save the markers in {}", files.dir(), e);
+        }
     }
 
     private void applyOnWorker(ChunkSnapshot snapshot) {
@@ -156,6 +188,15 @@ public final class MapSession {
         recaptureChanged();
         drainEvents();
         GpuPages.upload(store, stats, Config.UPLOAD_BYTES_PER_TICK);
+    }
+
+    /**
+     * The player added, changed or removed a marker: the file is written in the background. Tasks
+     * run in order, so the last save writes the latest list, and the read at start-up always comes
+     * before any save.
+     */
+    public void markersChanged() {
+        worker.submit(this::saveMarkersOnWorker);
     }
 
     /** The page of a region if it is in memory. */

@@ -3,7 +3,8 @@
 A lightweight minimap and world map for Minecraft 26.3 on Fabric. Client-side only.
 
 A plain map square in the top-left corner and a full-screen map (`M`) that keeps what it has
-recorded. Surface only, vanilla map colours, no frame, text, waypoints or cave view.
+recorded, with named markers you place on it. Surface only, vanilla map colours, no frame,
+coordinates or cave view.
 
 **Status:** runs in a real client (26.3, Vulkan back end, with the Sodium 0.9.3 fork). Not yet
 measured with mcbench. The self-tests below cover the rest.
@@ -25,8 +26,14 @@ At run time it needs Fabric API (modules `fabric-lifecycle-events-v1`, `fabric-r
 ## Using it
 
 - **Minimap:** top-left corner, turns with the view, an arrow for the player.
-- **World map:** `M` opens and closes it. Hold any mouse button and drag to move the map; scroll to
-  zoom about the pointer.
+- **World map:** `M` opens and closes it. Hold the left or middle mouse button and drag to move the
+  map; scroll to zoom about the pointer.
+- **Markers:** right-click the world map to put a named marker on that block. The dialog has a name
+  and "Show on the minimap too"; without it the marker is on the world map only. Right-click a
+  marker to rename it, change that choice or delete it. On the world map a marker is a yellow square
+  with its name above; on the minimap it is the square alone. Markers are kept per world and
+  dimension in `<game dir>/lightmap/<world>/<dimension>/markers.txt` (in memory only with
+  `lightmap.persist=false`).
 - **Settings:** with Sodium installed, Video Settings has a "LightMap" section with a Minimap page.
   Changes apply when you press Apply; none needs a restart.
 
@@ -81,7 +88,11 @@ A region is 32x32 chunks and is held as one 512x512 page, one pixel per block.
    view is drawn once, as its page or as a blank square, so nothing overlaps and opacity is just
    the alpha of the quads' colour. The quads are reused render states, so a frame allocates
    nothing of ours.
-5. **Save and load, worker thread.** A page is written ten seconds after it changes and when the
+5. **Markers.** Drawn as one more small quad each in the same pass, from a list that is replaced
+   rather than changed, so a frame walks it without a lock or allocation. Names on the world map go
+   through the game's own text drawing. The list is read on the worker when the world is entered
+   and written on the worker each time a marker is added, changed or removed.
+6. **Save and load, worker thread.** A page is written ten seconds after it changes and when the
    world is left, and dropped from memory thirty seconds after it was last drawn or changed.
    Regions recorded earlier load from disk when they come into view. Files store block state (by
    name), height and fluid depth, not colours, so the picture follows later changes to colouring.
@@ -106,8 +117,8 @@ task is part of `build`.
 | Path | Contents |
 |---|---|
 | `dev.lightmap` | Entry point, start-up settings (`Config`), in-game settings (`Settings`). |
-| `dev.lightmap.core` | No game imports. Pages, colour table, shading, dirty-tile rectangles, file format, page store, worker, view transform. |
-| `dev.lightmap.mc` | Game side. State table, chunk snapshot, session, textures and uploads, minimap, world map screen. |
+| `dev.lightmap.core` | No game imports. Pages, colour table, shading, dirty-tile rectangles, file format, page store, worker, view transform, markers. |
+| `dev.lightmap.mc` | Game side. State table, chunk snapshot, session, textures and uploads, minimap, world map screen, marker dialog. |
 | `dev.lightmap.compat` | The settings page for Sodium's video settings screen. Only loaded by Sodium. |
 | `dev.lightmap.mixin` | Two mixins: the block-change hook on `ClientLevel`, and an accessor for the GUI render state. |
 | `src/selfTest` | The self-tests, in their own source set. |
