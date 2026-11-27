@@ -11,6 +11,7 @@ import dev.lightmap.mixin.GuiGraphicsExtractorAccessor;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElement;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
 import net.minecraft.client.renderer.state.gui.GuiRenderState;
@@ -35,6 +36,8 @@ public final class MinimapHud implements HudElement {
     static final int MARKER = 0xFFE8463A;
     /** The colour of the player's named markers, on both maps. */
     static final int PLACED_MARKER = 0xFFF2C230;
+    /** The outline around a marker in the distinct style. */
+    static final int MARKER_OUTLINE = 0xFF101114;
 
     private final MapView view = new MapView();
     private final MapQuad marker = new MapQuad();
@@ -43,24 +46,64 @@ public final class MinimapHud implements HudElement {
     private ScreenRectangle area;
     private int areaLeft;
     private int areaSize;
+    /** Set by {@link #submit} when a marker in view wants its name drawn, so most frames skip that pass. */
+    private boolean namesInView;
 
     @Override
     public void extractRenderState(GuiGraphicsExtractor graphics, DeltaTracker delta) {
-        submit(((GuiGraphicsExtractorAccessor) graphics).lightmap$guiRenderState(), delta);
+        if (submit(((GuiGraphicsExtractorAccessor) graphics).lightmap$guiRenderState(), delta) && namesInView) {
+            names(graphics);
+        }
     }
 
-    /** Adds this frame's quads to the GUI render state. */
-    void submit(GuiRenderState state, DeltaTracker delta) {
+    /**
+     * The names of the markers that asked for one, above their squares and cut to the minimap.
+     * Text goes through the game's own text drawing, which allocates a little per name per frame;
+     * that cost exists only while such a marker is in view.
+     */
+    private void names(GuiGraphicsExtractor graphics) {
+        MapSession session = LightMapClient.session();
+        if (session == null) {
+            return;
+        }
+        Font font = Minecraft.getInstance().font;
+        int right = areaLeft + areaSize;
+        int color = (Settings.opacity() * 255 + 50) / 100 << 24 | 0xFFFFFF;
+        float half = markerHalf(Math.max(1, Minecraft.getInstance().getWindow().getGuiScale()));
+        graphics.enableScissor(areaLeft, areaLeft, right, right);
+        for (Markers.Marker m : session.markers.all()) {
+            if (!m.onMinimap() || !m.nameOnMinimap()) {
+                continue;
+            }
+            float sx = view.screenX(m.x() + 0.5, m.z() + 0.5);
+            float sy = view.screenY(m.x() + 0.5, m.z() + 0.5);
+            if (sx < areaLeft || sx > right || sy < areaLeft || sy > right) {
+                continue;
+            }
+            graphics.text(font, m.name(), Math.round(sx) - font.width(m.name()) / 2,
+                    Math.round(sy - half) - font.lineHeight - 1, color, true);
+        }
+        graphics.disableScissor();
+    }
+
+    /** Half the side of a marker's square in GUI units, for the style chosen in the settings. */
+    private static float markerHalf(int guiScale) {
+        return (Settings.distinctMarkers() ? 4f : 3f) / guiScale;
+    }
+
+    /** Adds this frame's quads to the GUI render state. Returns whether the minimap was drawn. */
+    boolean submit(GuiRenderState state, DeltaTracker delta) {
+        namesInView = false;
         int opacity = Settings.opacity();
         if (!Settings.minimap() || opacity <= 0) {
-            return;
+            return false;
         }
         MapSession session = LightMapClient.session();
         Minecraft minecraft = Minecraft.getInstance();
         Entity camera = minecraft.getCameraEntity();
         if (session == null || camera == null || camera.level() != session.level
                 || minecraft.gui.screen() instanceof WorldMapScreen) {
-            return;
+            return false;
         }
 
         int guiScale = Math.max(1, minecraft.getWindow().getGuiScale());
@@ -122,8 +165,13 @@ public final class MinimapHud implements HudElement {
         }
 
         // The player's markers that are meant for the minimap, under the arrow, cut to the square.
-        float half = 3f / guiScale;
+        // Distinct: a larger square with a dark outline, which is a second square under it.
+        // Discreet: a small plain square.
+        boolean distinct = Settings.distinctMarkers();
+        float half = markerHalf(guiScale);
+        float outline = half + 1f / guiScale;
         int markerColor = alpha | (PLACED_MARKER & 0xFFFFFF);
+        int outlineColor = alpha | (MARKER_OUTLINE & 0xFFFFFF);
         int dots = 0;
         for (Markers.Marker m : session.markers.all()) {
             if (!m.onMinimap()) {
@@ -131,8 +179,15 @@ public final class MinimapHud implements HudElement {
             }
             float sx = view.screenX(m.x() + 0.5, m.z() + 0.5);
             float sy = view.screenY(m.x() + 0.5, m.z() + 0.5);
-            if (sx + half < left || sx - half > left + size || sy + half < left || sy - half > left + size) {
+            if (sx + outline < left || sx - outline > left + size || sy + outline < left || sy - outline > left + size) {
                 continue;
+            }
+            namesInView |= m.nameOnMinimap();
+            if (distinct) {
+                markerQuads = MapQuad.pool(markerQuads, dots);
+                MapQuad edge = markerQuads[dots++];
+                edge.dot(sx, sy, outline, outlineColor, area, area);
+                state.addGlyphToCurrentLayer(edge);
             }
             markerQuads = MapQuad.pool(markerQuads, dots);
             MapQuad dot = markerQuads[dots++];
@@ -149,6 +204,7 @@ public final class MinimapHud implements HudElement {
         }
         marker.arrow(centre, centre, dirX, dirY, 8f / guiScale, alpha | (MARKER & 0xFFFFFF), area);
         state.addGlyphToCurrentLayer(marker);
+        return true;
     }
 
     private MapQuad quad(int index) {

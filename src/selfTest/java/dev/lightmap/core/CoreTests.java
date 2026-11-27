@@ -660,7 +660,19 @@ public final class CoreTests {
         String damaged = "lightmap-markers 1\n1\t2\t1\tGood\nx\t2\t1\tBad number\n3\t4\tyes\tBad flag\n5\t6\n\n7\t8\t0\tAlso\tgood\n";
         Check.eq(List.of(new Markers.Marker(1, 2, "Good", true), new Markers.Marker(7, 8, "Also\tgood", false)),
                 Markers.decode(damaged.getBytes(java.nio.charset.StandardCharsets.UTF_8)), "damaged lines are skipped");
-        for (String foreign : new String[] {"", "lightmap-markers 2\n1\t2\t1\tA\n", "hello\n"}) {
+
+        // Version 2 adds "name on the minimap" as a second flag bit; version 1 files still read.
+        Markers.Marker named = new Markers.Marker(9, 10, "Named", true, true);
+        byte[] v2 = Markers.encode(new Markers.Marker[] {home, named, odd});
+        Check.that(new String(v2, java.nio.charset.StandardCharsets.UTF_8).startsWith("lightmap-markers 2\n-120\t340\t1\tHome\n9\t10\t3\tNamed\n"), "written as version 2 with both flags");
+        Check.eq(List.of(home, named, odd), Markers.decode(v2), "both flags survive a round trip");
+        String v1 = "lightmap-markers 1\n1\t2\t1\tOld\n3\t4\t3\tNot a version 1 flag\n";
+        Check.eq(List.of(new Markers.Marker(1, 2, "Old", true, false)), Markers.decode(v1.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                "a version 1 file reads, with no names on the minimap");
+        String flags = "lightmap-markers 2\n1\t2\t2\tName only\n3\t4\t4\tBad flag\n5\t6\t11\tBad flag\n";
+        Check.eq(List.of(new Markers.Marker(1, 2, "Name only", false, true)), Markers.decode(flags.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                "flags outside 0 to 3 are damaged lines");
+        for (String foreign : new String[] {"", "lightmap-markers 3\n1\t2\t1\tA\n", "hello\n"}) {
             boolean refused = false;
             try {
                 Markers.decode(foreign.getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -702,6 +714,13 @@ public final class CoreTests {
             Check.eq(35, Settings.opacity(), "opacity survives a reload");
             Check.eq(256, Settings.size(), "size survives a reload");
             Check.that(!Settings.rotate() && !Settings.minimap(), "switches survive a reload");
+            Check.that(Settings.distinctMarkers(), "markers are distinct by default");
+            Settings.setDistinctMarkers(false);
+            Settings.save();
+            Settings.setDistinctMarkers(true);
+            Settings.load(file);
+            Check.that(!Settings.distinctMarkers(), "the marker style survives a reload");
+            Settings.setDistinctMarkers(true);
 
             Files.writeString(file, "lightmap.minimap.opacity=lots\nlightmap.minimap.size=99999\nlightmap.minimap=maybe\n");
             Settings.load(file);

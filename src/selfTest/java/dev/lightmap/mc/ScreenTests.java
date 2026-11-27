@@ -131,7 +131,7 @@ final class ScreenTests {
             GuiRenderState state = new GuiRenderState();
             hud.submit(state, DeltaTracker.ONE);
             List<GuiElementRenderState> waiting = elements(state);
-            Check.eq(6, waiting.size(), "before the regions load: four blank regions, the saved marker and the arrow");
+            Check.eq(7, waiting.size(), "before the regions load: four blank regions, the saved marker with its outline and the arrow");
             for (int i = 0; i < 4; i++) {
                 Check.that(waiting.get(i).textureSetup() == TextureSetup.noTexture(), "blank region " + i + " has no texture");
                 Check.eq(MinimapHud.BACKDROP, vertices(waiting.get(i)).color, "blank region " + i + " is the unexplored colour");
@@ -140,7 +140,7 @@ final class ScreenTests {
             settle(again);
             state = new GuiRenderState();
             hud.submit(state, DeltaTracker.ONE);
-            Check.eq(6, elements(state).size(), "after: four pages, the saved marker and the arrow");
+            Check.eq(7, elements(state).size(), "after: four pages, the saved marker with its outline and the arrow");
             Check.that(elements(state).get(0).textureSetup() != TextureSetup.noTexture(), "now textured");
             Check.eq(0L, again.stats.clientChunksCaptured, "without any chunk having loaded");
             Check.eq(4L, again.stats.workerPagesLoaded, "four regions read from disk");
@@ -321,18 +321,35 @@ final class ScreenTests {
         drawn = draw(screen);
         Check.that(placed(drawn, session, 400, 100, underX, underZ, 1.0, false), "zoomed in about the cursor");
 
-        // Dragging moves the map with the pointer.
-        Check.that(screen.mouseDragged(new MouseButtonEvent(410, 96, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0)), 10, -4), "drag handled");
+        // A drag only counts after a press on this screen. The game reports "a button is held"
+        // for a press that happened before the map was opened and whose release it never saw;
+        // that must not move the map.
+        Check.that(screen.mouseDragged(click(450, 140, InputConstants.MOUSE_BUTTON_LEFT), 50, 40), "stale drag is taken");
+        Check.that(placed(draw(screen), session, 400, 100, underX, underZ, 1.0, false), "but a drag without a press here moves nothing");
+
+        // Press, move, release: the map follows the pointer.
+        Check.that(screen.mouseClicked(click(400, 100, InputConstants.MOUSE_BUTTON_LEFT), false), "press handled");
+        Check.that(screen.mouseDragged(click(410, 96, InputConstants.MOUSE_BUTTON_LEFT), 10, -4), "drag handled");
         drawn = draw(screen);
         Check.that(placed(drawn, session, 410, 96, underX, underZ, 1.0, false), "dragged with the pointer");
+        Check.that(screen.mouseReleased(click(410, 96, InputConstants.MOUSE_BUTTON_LEFT)), "release handled");
+        screen.mouseDragged(click(440, 126, InputConstants.MOUSE_BUTTON_LEFT), 30, 30);
+        Check.that(placed(draw(screen), session, 410, 96, underX, underZ, 1.0, false), "after the release the map stays put");
 
-        // The middle button drags too; the right button does not, it is for markers. A click on
-        // the map is taken by the screen.
-        Check.that(screen.mouseDragged(new MouseButtonEvent(404, 106, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_MIDDLE, 0)), -6, 10), "middle button drags");
-        Check.that(screen.mouseDragged(new MouseButtonEvent(404, 106, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_RIGHT, 0)), 30, 30), "right drag is taken");
-        Check.that(screen.mouseDragged(new MouseButtonEvent(410, 96, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0)), 6, -10), "and dragged back");
-        Check.that(placed(draw(screen), session, 410, 96, underX, underZ, 1.0, false), "there and back again lands on the same spot, the right drag moved nothing");
-        Check.that(screen.mouseClicked(new MouseButtonEvent(410, 96, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0)), false), "clicks are handled");
+        // The middle button drags too; the right button does not, it is for markers.
+        screen.mouseClicked(click(410, 96, InputConstants.MOUSE_BUTTON_MIDDLE), false);
+        Check.that(screen.mouseDragged(click(404, 106, InputConstants.MOUSE_BUTTON_MIDDLE), -6, 10), "middle button drags");
+        Check.that(screen.mouseDragged(click(404, 106, InputConstants.MOUSE_BUTTON_RIGHT), 30, 30), "right drag is taken");
+        Check.that(screen.mouseDragged(click(404, 106, InputConstants.MOUSE_BUTTON_LEFT), 30, 30), "a button other than the pressed one is taken");
+        Check.that(screen.mouseDragged(click(410, 96, InputConstants.MOUSE_BUTTON_MIDDLE), 6, -10), "and dragged back");
+        Check.that(placed(draw(screen), session, 410, 96, underX, underZ, 1.0, false), "there and back again lands on the same spot, the other buttons moved nothing");
+        screen.mouseReleased(click(410, 96, InputConstants.MOUSE_BUTTON_MIDDLE));
+
+        // Re-entering the screen (as after the marker dialog) forgets a press that was under way.
+        screen.mouseClicked(click(410, 96, InputConstants.MOUSE_BUTTON_LEFT), false);
+        screen.init();
+        screen.mouseDragged(click(440, 126, InputConstants.MOUSE_BUTTON_LEFT), 30, 30);
+        Check.that(placed(draw(screen), session, 410, 96, underX, underZ, 1.0, false), "a press from before the screen was re-entered does not drag");
 
         // Scrolling out twice reaches the widest view, which is drawn smoothed; a third does nothing.
         screen.mouseScrolled(410, 96, 0, -1);
@@ -360,6 +377,16 @@ final class ScreenTests {
         screen.height = 360;
         screen.init();
         Check.eq(6, draw(screen).size(), "no markers yet: background, four pages and the arrow");
+        // The first checks use the small plain style; the distinct one has its own below.
+        Settings.setDistinctMarkers(false);
+        try {
+            return markers(session, screen);
+        } finally {
+            Settings.setDistinctMarkers(true);
+        }
+    }
+
+    private static List<Markers.Marker> markers(MapSession session, WorldMapScreen screen) throws Exception {
 
         // A right click opens the dialog for the block under the pointer; other buttons open nothing.
         Check.eq(null, screen.markerDialog(click(340, 160, InputConstants.MOUSE_BUTTON_LEFT)), "a left click opens no dialog");
@@ -373,6 +400,7 @@ final class ScreenTests {
         GameTests.set(MarkerScreen.class, dialog, "name", "  Home ");
         dialog.commit();
         Markers.Marker home = new Markers.Marker(140, -91, "Home", true);
+        Check.that(!home.nameOnMinimap(), "the name is not on the minimap by default");
         Check.eq(List.of(home), List.of(session.markers.all()), "named marker on the clicked block, on the minimap by default");
 
         // On the world map: a square at the block's centre, under the arrow.
@@ -405,6 +433,51 @@ final class ScreenTests {
             Settings.setOpacity(100);
         }
 
+        // The distinct style: a larger square on a dark, slightly larger one.
+        Settings.setDistinctMarkers(true);
+        try {
+            drawn = draw(hud);
+            Check.eq(7, drawn.size(), "distinct: four pages, outline, marker and the arrow");
+            GameTests.Vertices edge = vertices(drawn.get(4));
+            GameTests.vertex(edge.list.get(0), mx - 2.5f, my - 2.5f, Float.NaN, Float.NaN, "distinct: outline is 10 screen pixels wide");
+            Check.eq(MinimapHud.MARKER_OUTLINE, edge.color, "distinct: outline colour");
+            GameTests.Vertices inner = vertices(drawn.get(5));
+            GameTests.vertex(inner.list.get(0), mx - 2f, my - 2f, Float.NaN, Float.NaN, "distinct: marker is 8 screen pixels wide, drawn over the outline");
+            Check.eq(MinimapHud.PLACED_MARKER, inner.color, "distinct: marker colour");
+            Check.eq(new ScreenRectangle(5, 5, 184, 184), drawn.get(4).scissorArea(), "distinct: outline is clipped to the square");
+        } finally {
+            Settings.setDistinctMarkers(false);
+        }
+
+        // The name on the minimap is a choice per marker, off unless ticked, and only for a marker
+        // that is on the minimap. The text itself needs a font, so only the decision is checked.
+        Check.that(!home.nameOnMinimap() && !namesInView(hud), "no name on the minimap unless asked for");
+        dialog = screen.markerDialog(click(wx, wy, InputConstants.MOUSE_BUTTON_RIGHT));
+        GameTests.set(MarkerScreen.class, dialog, "nameOnMinimap", true);
+        dialog.commit();
+        home = new Markers.Marker(140, -91, "Home", true, true);
+        Check.eq(home, session.markers.all()[0], "ticking the second box stores it");
+        draw(hud);
+        Check.that(namesInView(hud), "and the minimap draws that marker's name");
+        try {
+            Settings.setMinimap(false);
+            draw(hud);
+            Check.that(!namesInView(hud), "but not with the minimap switched off");
+        } finally {
+            Settings.setMinimap(true);
+        }
+        dialog = screen.markerDialog(click(wx, wy, InputConstants.MOUSE_BUTTON_RIGHT));
+        Check.eq(true, GameTests.get(MarkerScreen.class, dialog, "nameOnMinimap"), "the dialog opens with the stored choice");
+        GameTests.set(MarkerScreen.class, dialog, "onMinimap", false);
+        dialog.commit();
+        Check.eq(new Markers.Marker(140, -91, "Home", false, false), session.markers.all()[0], "a marker taken off the minimap loses the name choice with it");
+        GameTests.set(MarkerScreen.class, dialog, "onMinimap", true);
+        GameTests.set(MarkerScreen.class, dialog, "nameOnMinimap", false);
+        GameTests.set(MarkerScreen.class, dialog, "existing", session.markers.all()[0]);
+        dialog.commit();
+        home = new Markers.Marker(140, -91, "Home", true);
+        Check.eq(home, session.markers.all()[0], "back to how it was");
+
         // A marker for the full map only, and one far away: neither is on the minimap.
         dialog = screen.markerDialog(click(300, 200, InputConstants.MOUSE_BUTTON_RIGHT));
         GameTests.set(MarkerScreen.class, dialog, "name", "Mine");
@@ -429,6 +502,32 @@ final class ScreenTests {
         dialog.remove();
         Check.eq(2, session.markers.all().length, "deleted");
         Check.that(session.markers.all()[0].name().equals("Mine"), "the others stay");
+
+        // A left click on a marker removes it: press and release on it without moving the map.
+        session.markers.add(home);
+        session.markersChanged();
+        Check.eq(3, session.markers.all().length, "three markers before clicking");
+        screen.mouseClicked(click(wx + 60, wy + 60, InputConstants.MOUSE_BUTTON_LEFT), false);
+        screen.mouseReleased(click(wx + 60, wy + 60, InputConstants.MOUSE_BUTTON_LEFT));
+        Check.eq(3, session.markers.all().length, "a click on empty map removes nothing");
+        screen.mouseClicked(click(wx, wy, InputConstants.MOUSE_BUTTON_MIDDLE), false);
+        screen.mouseReleased(click(wx, wy, InputConstants.MOUSE_BUTTON_MIDDLE));
+        Check.eq(3, session.markers.all().length, "a middle click on a marker removes nothing");
+        // A drag that starts on a marker moves the map and keeps the marker.
+        screen.mouseClicked(click(wx, wy, InputConstants.MOUSE_BUTTON_LEFT), false);
+        screen.mouseDragged(click(wx + 20, wy, InputConstants.MOUSE_BUTTON_LEFT), 20, 0);
+        screen.mouseReleased(click(wx + 20, wy, InputConstants.MOUSE_BUTTON_LEFT));
+        Check.eq(3, session.markers.all().length, "a drag starting on a marker keeps it");
+        screen.mouseClicked(click(wx + 20, wy, InputConstants.MOUSE_BUTTON_MIDDLE), false);
+        screen.mouseDragged(click(wx, wy, InputConstants.MOUSE_BUTTON_MIDDLE), -20, 0);
+        screen.mouseReleased(click(wx, wy, InputConstants.MOUSE_BUTTON_MIDDLE));
+        // A pointer that shakes by a pixel between press and release is still a click.
+        screen.mouseClicked(click(wx, wy, InputConstants.MOUSE_BUTTON_LEFT), false);
+        screen.mouseDragged(click(wx + 0.5, wy, InputConstants.MOUSE_BUTTON_LEFT), 0.5, 0);
+        screen.mouseReleased(click(wx + 0.5, wy, InputConstants.MOUSE_BUTTON_LEFT));
+        Check.eq(2, session.markers.all().length, "a left click on a marker removes it");
+        Check.that(!List.of(session.markers.all()).contains(home), "and it is the clicked one");
+        screen.mouseDragged(click(wx - 0.5, wy, InputConstants.MOUSE_BUTTON_LEFT), -0.5, 0);
 
         // What a minimap frame costs with markers on it.
         session.markers.add(home);
@@ -457,6 +556,10 @@ final class ScreenTests {
                 session.markers.all().length, nanos / (double) frames, perFrame);
         Check.that(perFrame < 400, "markers add no allocation to a minimap frame (" + Math.round(perFrame) + " bytes)");
         return List.of(session.markers.all());
+    }
+
+    private static boolean namesInView(MinimapHud hud) throws Exception {
+        return (boolean) GameTests.get(MinimapHud.class, hud, "namesInView");
     }
 
     private static MouseButtonEvent click(double x, double y, int button) {

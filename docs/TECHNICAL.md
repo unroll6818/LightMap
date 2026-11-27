@@ -31,11 +31,13 @@ Releases are built by GitHub Actions: every push to `main` is built and tested, 
 - **Minimap:** top-left corner, turns with the view, an arrow for the player.
 - **World map:** `M` opens and closes it. Hold the left or middle mouse button and drag to move the
   map; scroll to zoom about the pointer.
-- **Markers:** right-click the world map to put a named marker on that block. The dialog has a name
-  and "Show on the minimap too"; without it the marker is on the world map only. Right-click a
-  marker to rename it, change that choice or delete it. On the world map a marker is a yellow square
-  with its name above; on the minimap it is the square alone. Markers are kept per world and
-  dimension in `<game dir>/lightmap/<world>/<dimension>/markers.txt` (in memory only with
+- **Markers:** right-click the world map to put a named marker on that block. The dialog has a
+  name, "Show on the minimap too" (without it the marker is on the world map only) and "Show its
+  name on the minimap". Right-click a marker to change any of that or delete it; left-click a
+  marker to remove it straight away. On the world map a marker is a yellow square with its name
+  above. On the minimap it is the square, larger and outlined in the "distinct" style or small and
+  plain otherwise, with its name above only if that box was ticked. Markers are kept per world
+  and dimension in `<game dir>/lightmap/<world>/<dimension>/markers.txt` (in memory only with
   `lightmap.persist=false`).
 - **Settings:** with Sodium installed, Video Settings has a "LightMap" section with a Minimap page.
   Changes apply when you press Apply; none needs a restart.
@@ -50,6 +52,7 @@ Changed in the game and kept in `config/lightmap.properties`:
 | Opacity | `lightmap.minimap.opacity` | `100` | 0 to 100 percent, in steps of 5 in the screen. At 0 nothing is drawn. |
 | Size | `lightmap.minimap.size` | `368` | Side of the square, in screen pixels (not GUI-scaled), 64 to 1024. |
 | Rotate with view | `lightmap.minimap.rotate` | `true` | View direction up. Off is north up. |
+| Distinct markers | `lightmap.minimap.markers.distinct` | `true` | Minimap markers 8 px with a dark outline. Off is 6 px, plain. |
 
 A JVM system property with the same key wins over the file, is never written back to it, and
 shows the control locked. That is how an mcbench run pins a value (`sysprops`).
@@ -92,8 +95,10 @@ A region is 32x32 chunks and is held as one 512x512 page, one pixel per block.
    the alpha of the quads' colour. The quads are reused render states, so a frame allocates
    nothing of ours.
 5. **Markers.** Drawn as one more small quad each in the same pass, from a list that is replaced
-   rather than changed, so a frame walks it without a lock or allocation. Names on the world map go
-   through the game's own text drawing. The list is read on the worker when the world is entered
+   rather than changed, so a frame walks it without a lock or allocation. Names go through the game's own text
+   drawing, which allocates a little per name per frame: on the world map always, on the minimap
+   only for markers in view whose name was asked for. The distinct style is a second, dark quad
+   under each marker. The list is read on the worker when the world is entered
    and written on the worker each time a marker is added, changed or removed.
 6. **Save and load, worker thread.** A page is written ten seconds after it changes and when the
    world is left, and dropped from memory thirty seconds after it was last drawn or changed.

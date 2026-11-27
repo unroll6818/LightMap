@@ -15,5 +15,8 @@
   "lightmap.marker.edit": "Edit marker",
   "lightmap.marker.name": "Name",
   "lightmap.marker.minimap": "Show on the minimap too",
-  "lightmap.marker.delete": "Delete"
+  "lightmap.marker.delete": "Delete",
+  "lightmap.options.minimap.distinct_markers": "Distinct markers",
+  "lightmap.options.minimap.distinct_markers.tooltip": "Draws markers on the minimap larger and with a dark outline. Off draws them small and plain.",
+  "lightmap.marker.minimap_name": "Show its name on the minimap"
 }
