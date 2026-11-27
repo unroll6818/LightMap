@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "lightmap",
+  "version": "${version}",
+  "name": "LightMap",
+  "description": "A lightweight minimap and world map. The map lives in persistent GPU textures and is drawn as a few quads in the GUI pass; chunks are recorded when they change, coloured off the client thread and saved in the background.",
+  "license": "All-Rights-Reserved",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.lightmap.LightMapClient"],
+    "sodium:config_api_user": ["dev.lightmap.compat.SodiumOptions"]
+  },
+  "mixins": ["lightmap.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "26.3.x",
+    "java": ">=25",
+    "fabric-lifecycle-events-v1": "*",
+    "fabric-rendering-v1": "*",
+    "fabric-key-mapping-api-v1": "*"
+  },
+  "suggests": {
+    "sodium": "*"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "key.category.lightmap.map": "LightMap",
+  "key.lightmap.world_map": "Open world map",
+  "lightmap.world_map": "World map",
+  "lightmap.options.minimap": "Minimap",
+  "lightmap.options.minimap.show": "Show minimap",
+  "lightmap.options.minimap.show.tooltip": "Draws the minimap in the top-left corner. The map is recorded either way.",
+  "lightmap.options.minimap.opacity": "Opacity",
+  "lightmap.options.minimap.opacity.tooltip": "How solid the minimap is. Lower values let the game show through; at 0% it is not drawn.",
+  "lightmap.options.minimap.size": "Size",
+  "lightmap.options.minimap.size.tooltip": "Side of the minimap in screen pixels. It stays the same size at any GUI scale.",
+  "lightmap.options.minimap.rotate": "Rotate with view",
+  "lightmap.options.minimap.rotate.tooltip": "Turns the minimap so the direction you look is up. Off keeps north up."
+}

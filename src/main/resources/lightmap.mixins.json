@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "package": "dev.lightmap.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "ClientLevelMixin",
+    "GuiGraphicsExtractorAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
