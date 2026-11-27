@@ -4,6 +4,7 @@ import dev.lightmap.Config;
 import dev.lightmap.LightMapClient;
 import dev.lightmap.Settings;
 import dev.lightmap.core.MapView;
+import dev.lightmap.core.Markers;
 import dev.lightmap.core.RegionPage;
 import dev.lightmap.core.Regions;
 import dev.lightmap.mixin.GuiGraphicsExtractorAccessor;
@@ -15,8 +16,6 @@ import net.minecraft.client.gui.navigation.ScreenRectangle;
 import net.minecraft.client.renderer.state.gui.GuiRenderState;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
-
-import java.util.Arrays;
 
 /**
  * The minimap: the region pages around the camera, drawn as textured quads straight into the
@@ -34,10 +33,13 @@ public final class MinimapHud implements HudElement {
     /** The colour pages use for unexplored ground, so regions without a page blend in. */
     static final int BACKDROP = 0xFF141518;
     static final int MARKER = 0xFFE8463A;
+    /** The colour of the player's named markers, on both maps. */
+    static final int PLACED_MARKER = 0xFFF2C230;
 
     private final MapView view = new MapView();
     private final MapQuad marker = new MapQuad();
     private MapQuad[] pageQuads = new MapQuad[0];
+    private MapQuad[] markerQuads = new MapQuad[0];
     private ScreenRectangle area;
     private int areaLeft;
     private int areaSize;
@@ -119,6 +121,25 @@ public final class MinimapHud implements HudElement {
             }
         }
 
+        // The player's markers that are meant for the minimap, under the arrow, cut to the square.
+        float half = 3f / guiScale;
+        int markerColor = alpha | (PLACED_MARKER & 0xFFFFFF);
+        int dots = 0;
+        for (Markers.Marker m : session.markers.all()) {
+            if (!m.onMinimap()) {
+                continue;
+            }
+            float sx = view.screenX(m.x() + 0.5, m.z() + 0.5);
+            float sy = view.screenY(m.x() + 0.5, m.z() + 0.5);
+            if (sx + half < left || sx - half > left + size || sy + half < left || sy - half > left + size) {
+                continue;
+            }
+            markerQuads = MapQuad.pool(markerQuads, dots);
+            MapQuad dot = markerQuads[dots++];
+            dot.dot(sx, sy, half, markerColor, area, area);
+            state.addGlyphToCurrentLayer(dot);
+        }
+
         float dirX = 0f;
         float dirY = -1f;
         if (!rotate) {
@@ -131,13 +152,7 @@ public final class MinimapHud implements HudElement {
     }
 
     private MapQuad quad(int index) {
-        if (index >= pageQuads.length) {
-            int from = pageQuads.length;
-            pageQuads = Arrays.copyOf(pageQuads, Math.max(4, index + 1));
-            for (int i = from; i < pageQuads.length; i++) {
-                pageQuads[i] = new MapQuad();
-            }
-        }
+        pageQuads = MapQuad.pool(pageQuads, index);
         return pageQuads[index];
     }
 }

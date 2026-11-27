@@ -132,6 +132,13 @@ public final class GameTests {
         f.set(target, value);
     }
 
+    /** Reads a private field. */
+    static Object get(Class<?> owner, Object target, String field) throws Exception {
+        Field f = owner.getDeclaredField(field);
+        f.setAccessible(true);
+        return f.get(target);
+    }
+
     /** For creating a game object without running its constructor. */
     @SuppressWarnings("removal")
     static sun.misc.Unsafe unsafe() throws Exception {

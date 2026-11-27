@@ -10,5 +10,10 @@
   "lightmap.options.minimap.size": "Size",
   "lightmap.options.minimap.size.tooltip": "Side of the minimap in screen pixels. It stays the same size at any GUI scale.",
   "lightmap.options.minimap.rotate": "Rotate with view",
-  "lightmap.options.minimap.rotate.tooltip": "Turns the minimap so the direction you look is up. Off keeps north up."
+  "lightmap.options.minimap.rotate.tooltip": "Turns the minimap so the direction you look is up. Off keeps north up.",
+  "lightmap.marker.new": "New marker",
+  "lightmap.marker.edit": "Edit marker",
+  "lightmap.marker.name": "Name",
+  "lightmap.marker.minimap": "Show on the minimap too",
+  "lightmap.marker.delete": "Delete"
 }

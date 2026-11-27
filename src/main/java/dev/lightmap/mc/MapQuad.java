@@ -10,6 +10,8 @@ import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.renderer.state.gui.GuiElementRenderState;
 import org.jspecify.annotations.Nullable;
 
+import java.util.Arrays;
+
 /**
  * One quad for the game's GUI renderer, either a map page or a flat colour.
  *
@@ -25,6 +27,22 @@ final class MapQuad implements GuiElementRenderState {
     private @Nullable TextureSetup texture;
     private @Nullable ScreenRectangle scissor;
     private @Nullable ScreenRectangle bounds;
+
+    /**
+     * Returns {@code quads}, or a longer copy of it, with a quad at {@code index}. Quads are only
+     * ever added, so a frame that needs no more than an earlier one allocates nothing.
+     */
+    static MapQuad[] pool(MapQuad[] quads, int index) {
+        if (index < quads.length) {
+            return quads;
+        }
+        int from = quads.length;
+        MapQuad[] grown = Arrays.copyOf(quads, Math.max(4, Math.max(index + 1, from * 2)));
+        for (int i = from; i < grown.length; i++) {
+            grown[i] = new MapQuad();
+        }
+        return grown;
+    }
 
     /**
      * A region's page, placed by the view transform and clipped to {@code clip} if given. The
@@ -76,6 +94,12 @@ final class MapQuad implements GuiElementRenderState {
         this.texture = null;
         this.scissor = null;
         this.bounds = bounds;
+    }
+
+    /** A square of one colour centred on a screen position: a marker. Clipped to {@code clip} if given. */
+    void dot(float x, float y, float half, int argb, @Nullable ScreenRectangle clip, ScreenRectangle bounds) {
+        fill(x - half, y - half, x + half, y + half, argb, bounds);
+        this.scissor = clip;
     }
 
     /**

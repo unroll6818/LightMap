@@ -15,7 +15,7 @@ val sodiumApiVersion = "0.9.3+mc26.3"
 val sodiumJar = providers.gradleProperty("sodiumJar")
 
 group = "dev.lightmap"
-version = "0.2.0"
+version = "0.3.0"
 
 base {
     archivesName = "lightmap"

@@ -6,6 +6,7 @@ import dev.lightmap.LightMapClient;
 import dev.lightmap.Settings;
 import dev.lightmap.core.Check;
 import dev.lightmap.core.MapWorker;
+import dev.lightmap.core.Markers;
 import dev.lightmap.core.RegionFiles;
 import dev.lightmap.core.RegionPage;
 import dev.lightmap.core.Regions;
@@ -108,6 +109,7 @@ final class ScreenTests {
 
             minimap(session);
             worldMap(session);
+            List<Markers.Marker> placed = markers(session);
 
             // Leaving the world frees the textures and saves the map under the game directory.
             session.close();
@@ -116,18 +118,20 @@ final class ScreenTests {
             Check.that(gpu.textures.stream().allMatch(t -> t.closed), "textures closed on leaving");
             Path saved = gameDir.resolve("lightmap").resolve("server-unknown").resolve("minecraft_overworld");
             Check.eq(4, new RegionFiles(saved).list().length, "four region files in " + gameDir.relativize(saved));
+            Check.eq(placed, Markers.decode(new RegionFiles(saved).readMarkers()), "markers saved next to them");
 
             // Coming back: nothing is loaded and no chunks arrive, yet the minimap asks for the
             // saved regions around the camera and gets them from disk.
             MapSession again = MapSession.open(minecraft, level, worker);
             GameTests.set(LightMapClient.class, null, "session", again);
             Check.that(worker.await(60_000), "second session opened");
+            Check.eq(placed, List.of(again.markers.all()), "markers read back in the next session");
             again.tick();
             MinimapHud hud = new MinimapHud();
             GuiRenderState state = new GuiRenderState();
             hud.submit(state, DeltaTracker.ONE);
             List<GuiElementRenderState> waiting = elements(state);
-            Check.eq(5, waiting.size(), "before the regions load: four blank regions and the marker");
+            Check.eq(6, waiting.size(), "before the regions load: four blank regions, the saved marker and the arrow");
             for (int i = 0; i < 4; i++) {
                 Check.that(waiting.get(i).textureSetup() == TextureSetup.noTexture(), "blank region " + i + " has no texture");
                 Check.eq(MinimapHud.BACKDROP, vertices(waiting.get(i)).color, "blank region " + i + " is the unexplored colour");
@@ -136,7 +140,7 @@ final class ScreenTests {
             settle(again);
             state = new GuiRenderState();
             hud.submit(state, DeltaTracker.ONE);
-            Check.eq(5, elements(state).size(), "after: four pages and the marker");
+            Check.eq(6, elements(state).size(), "after: four pages, the saved marker and the arrow");
             Check.that(elements(state).get(0).textureSetup() != TextureSetup.noTexture(), "now textured");
             Check.eq(0L, again.stats.clientChunksCaptured, "without any chunk having loaded");
             Check.eq(4L, again.stats.workerPagesLoaded, "four regions read from disk");
@@ -318,15 +322,17 @@ final class ScreenTests {
         Check.that(placed(drawn, session, 400, 100, underX, underZ, 1.0, false), "zoomed in about the cursor");
 
         // Dragging moves the map with the pointer.
-        Check.that(screen.mouseDragged(new MouseButtonEvent(410, 96, new MouseButtonInfo(0, 0)), 10, -4), "drag handled");
+        Check.that(screen.mouseDragged(new MouseButtonEvent(410, 96, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0)), 10, -4), "drag handled");
         drawn = draw(screen);
         Check.that(placed(drawn, session, 410, 96, underX, underZ, 1.0, false), "dragged with the pointer");
 
-        // Any mouse button drags, and a click on the map is taken by the screen.
-        Check.that(screen.mouseDragged(new MouseButtonEvent(404, 106, new MouseButtonInfo(1, 0)), -6, 10), "right button drags too");
-        Check.that(screen.mouseDragged(new MouseButtonEvent(410, 96, new MouseButtonInfo(2, 0)), 6, -10), "and the middle button");
-        Check.that(placed(draw(screen), session, 410, 96, underX, underZ, 1.0, false), "there and back again lands on the same spot");
-        Check.that(screen.mouseClicked(new MouseButtonEvent(410, 96, new MouseButtonInfo(0, 0)), false), "clicks are handled");
+        // The middle button drags too; the right button does not, it is for markers. A click on
+        // the map is taken by the screen.
+        Check.that(screen.mouseDragged(new MouseButtonEvent(404, 106, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_MIDDLE, 0)), -6, 10), "middle button drags");
+        Check.that(screen.mouseDragged(new MouseButtonEvent(404, 106, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_RIGHT, 0)), 30, 30), "right drag is taken");
+        Check.that(screen.mouseDragged(new MouseButtonEvent(410, 96, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0)), 6, -10), "and dragged back");
+        Check.that(placed(draw(screen), session, 410, 96, underX, underZ, 1.0, false), "there and back again lands on the same spot, the right drag moved nothing");
+        Check.that(screen.mouseClicked(new MouseButtonEvent(410, 96, new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0)), false), "clicks are handled");
 
         // Scrolling out twice reaches the widest view, which is drawn smoothed; a third does nothing.
         screen.mouseScrolled(410, 96, 0, -1);
@@ -344,6 +350,117 @@ final class ScreenTests {
         Check.that(armed.getBoolean(screen), "after release the key will close it");
         Check.that(!screen.keyPressed(new KeyEvent(InputConstants.KEY_A, 0, 0)), "other keys are not swallowed");
         Check.that(!screen.isPauseScreen(), "the game keeps running behind the map");
+    }
+
+    // ------------------------------------------------------------------ markers
+
+    private static List<Markers.Marker> markers(MapSession session) throws Exception {
+        WorldMapScreen screen = new WorldMapScreen();
+        screen.width = 640;
+        screen.height = 360;
+        screen.init();
+        Check.eq(6, draw(screen).size(), "no markers yet: background, four pages and the arrow");
+
+        // A right click opens the dialog for the block under the pointer; other buttons open nothing.
+        Check.eq(null, screen.markerDialog(click(340, 160, InputConstants.MOUSE_BUTTON_LEFT)), "a left click opens no dialog");
+        Check.eq(null, screen.markerDialog(click(340, 160, InputConstants.MOUSE_BUTTON_MIDDLE)), "nor a middle click");
+        MarkerScreen dialog = screen.markerDialog(click(340, 160, InputConstants.MOUSE_BUTTON_RIGHT));
+        Check.that(dialog != null, "a right click opens the marker dialog");
+        // Half a GUI unit per block about the camera: (340, 160) is block 140.5, -90.25.
+        GameTests.set(MarkerScreen.class, dialog, "name", "   ");
+        dialog.commit();
+        Check.eq(0, session.markers.all().length, "a blank name adds nothing");
+        GameTests.set(MarkerScreen.class, dialog, "name", "  Home ");
+        dialog.commit();
+        Markers.Marker home = new Markers.Marker(140, -91, "Home", true);
+        Check.eq(List.of(home), List.of(session.markers.all()), "named marker on the clicked block, on the minimap by default");
+
+        // On the world map: a square at the block's centre, under the arrow.
+        List<GuiElementRenderState> drawn = draw(screen);
+        Check.eq(7, drawn.size(), "world map: background, four pages, the marker and the arrow");
+        float wx = (float) (320 + (140.5 - CAMERA_X) * 0.5);
+        float wy = (float) (180 + (-90.5 - CAMERA_Z) * 0.5);
+        GameTests.Vertices dot = vertices(drawn.get(5));
+        GameTests.vertex(dot.list.get(0), wx - 2, wy - 2, Float.NaN, Float.NaN, "world map marker, top-left corner");
+        GameTests.vertex(dot.list.get(2), wx + 2, wy + 2, Float.NaN, Float.NaN, "world map marker, bottom-right corner");
+        Check.eq(MinimapHud.PLACED_MARKER, dot.color, "world map marker colour");
+        Check.that(dot.turn() < 0, "world map marker faces the viewer");
+
+        // On the minimap: the same block, turned with the view and cut to the square.
+        MinimapHud hud = new MinimapHud();
+        drawn = draw(hud);
+        Check.eq(6, drawn.size(), "minimap: four pages, the marker and the arrow");
+        double angle = Math.PI - Math.toRadians(YAW);
+        double dx = (140.5 - CAMERA_X) * 0.5;
+        double dz = (-90.5 - CAMERA_Z) * 0.5;
+        float mx = (float) (97 + dx * Math.cos(angle) - dz * Math.sin(angle));
+        float my = (float) (97 + dx * Math.sin(angle) + dz * Math.cos(angle));
+        GameTests.vertex(vertices(drawn.get(4)).list.get(0), mx - 1.5f, my - 1.5f, Float.NaN, Float.NaN, "minimap marker position");
+        Check.eq(new ScreenRectangle(5, 5, 184, 184), drawn.get(4).scissorArea(), "minimap marker is clipped to the square");
+        GameTests.vertex(vertices(drawn.get(5)).list.get(0), 97f, 93f, Float.NaN, Float.NaN, "the arrow still comes last, on top");
+        try {
+            Settings.setOpacity(40);
+            Check.eq(0x66000000 | (MinimapHud.PLACED_MARKER & 0xFFFFFF), vertices(draw(hud).get(4)).color, "minimap marker follows the opacity");
+        } finally {
+            Settings.setOpacity(100);
+        }
+
+        // A marker for the full map only, and one far away: neither is on the minimap.
+        dialog = screen.markerDialog(click(300, 200, InputConstants.MOUSE_BUTTON_RIGHT));
+        GameTests.set(MarkerScreen.class, dialog, "name", "Mine");
+        GameTests.set(MarkerScreen.class, dialog, "onMinimap", false);
+        dialog.commit();
+        session.markers.add(new Markers.Marker(5000, 5000, "Far", true));
+        session.markersChanged();
+        Check.eq(8, draw(screen).size(), "world map shows both markers in view, not the far one");
+        Check.eq(6, draw(hud).size(), "minimap still shows only the one meant for it");
+
+        // Right-clicking a marker's square opens it again: change it, then delete it.
+        dialog = screen.markerDialog(click(wx + 2.5, wy - 2.5, InputConstants.MOUSE_BUTTON_RIGHT));
+        Check.that(dialog != null && home.equals(GameTests.get(MarkerScreen.class, dialog, "existing")), "a click near the square picks that marker");
+        GameTests.set(MarkerScreen.class, dialog, "onMinimap", false);
+        dialog.commit();
+        Markers.Marker homeMapOnly = new Markers.Marker(140, -91, "Home", false);
+        Check.eq(homeMapOnly, session.markers.all()[0], "changed in place, minimap switched off");
+        Check.eq(5, draw(hud).size(), "and gone from the minimap");
+        Check.eq(null, GameTests.get(MarkerScreen.class, screen.markerDialog(click(wx + 4, wy, InputConstants.MOUSE_BUTTON_RIGHT)), "existing"),
+                "a click further off is a new marker");
+        dialog = screen.markerDialog(click(wx, wy, InputConstants.MOUSE_BUTTON_RIGHT));
+        dialog.remove();
+        Check.eq(2, session.markers.all().length, "deleted");
+        Check.that(session.markers.all()[0].name().equals("Mine"), "the others stay");
+
+        // What a minimap frame costs with markers on it.
+        session.markers.add(home);
+        session.markersChanged();
+        GuiRenderState state = new GuiRenderState();
+        int frames = 200_000;
+        for (int i = 0; i < 20_000; i++) {
+            state.reset();
+            hud.submit(state, DeltaTracker.ONE);
+        }
+        long emptyBytes = allocated();
+        for (int i = 0; i < frames; i++) {
+            state.reset();
+        }
+        emptyBytes = allocated() - emptyBytes;
+        long bytes = allocated();
+        long nanos = System.nanoTime();
+        for (int i = 0; i < frames; i++) {
+            state.reset();
+            hud.submit(state, DeltaTracker.ONE);
+        }
+        nanos = System.nanoTime() - nanos;
+        bytes = allocated() - bytes;
+        double perFrame = (bytes - emptyBytes) / (double) frames;
+        System.out.printf("  minimap per frame with %d markers: %.0f ns, %.0f bytes allocated%n",
+                session.markers.all().length, nanos / (double) frames, perFrame);
+        Check.that(perFrame < 400, "markers add no allocation to a minimap frame (" + Math.round(perFrame) + " bytes)");
+        return List.of(session.markers.all());
+    }
+
+    private static MouseButtonEvent click(double x, double y, int button) {
+        return new MouseButtonEvent(x, y, new MouseButtonInfo(button, 0));
     }
 
     private static List<GuiElementRenderState> draw(WorldMapScreen screen) {
