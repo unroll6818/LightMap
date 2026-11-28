@@ -65,30 +65,69 @@ final class UploadTests {
         int stone = GameTests.id(net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
         int sand = GameTests.id(net.minecraft.world.level.block.Blocks.SAND.defaultBlockState());
 
-        // Two regions get their first chunks. A new texture needs the whole page, 1 MB, so with a
-        // 1 MB budget the two pages go out on two separate ticks.
+        // Two regions get their first chunks. A new page needs all of itself sent, 1 MB, so with a
+        // 1 MB budget the two pages go out on two separate ticks. Both live in one atlas texture,
+        // whose creation also writes its small white patch.
+        int texturesBefore = gpu.textures.size();
+        int writesBefore = gpu.writes;
         store.applyChunk(2, 3, chunk(stone, 70), SECOND);
         store.applyChunk(40, 3, chunk(sand, 64), SECOND);
         RegionPage a = store.pollEvent();
         RegionPage b = store.pollEvent();
 
         GpuPages.upload(store, stats, 1 << 20);
-        Check.eq(1, gpu.textures.size(), "one texture after the first tick");
-        Check.eq(1, gpu.writes, "one upload call");
+        Check.eq(1, gpu.textures.size() - texturesBefore, "one texture after the first tick");
+        Check.eq(2, gpu.writes - writesBefore, "two write calls: the white patch and the page");
         Check.that(a.gpu instanceof GpuPages.Handle h && h.ready, "first page ready");
         Check.eq(null, b.gpu, "second page still waiting");
         GpuPages.upload(store, stats, 1 << 20);
-        Check.eq(2, gpu.textures.size(), "two textures after the second tick");
+        Check.eq(1, gpu.textures.size() - texturesBefore, "still one texture after the second tick: the pages share it");
+        Check.eq(1, GpuPages.atlases(), "one atlas open");
+        GpuPages.Handle ha = (GpuPages.Handle) a.gpu;
+        GpuPages.Handle hb = (GpuPages.Handle) b.gpu;
+        Check.that(ha.atlas == hb.atlas && ha.slot == 0 && hb.slot == 1, "first two slots of the same atlas");
+        Check.that(ha.linear == hb.linear && ha.nearest == hb.nearest && ha.linear != ha.nearest, "pages on one atlas share its two texture setups");
+        Check.that(hb.originX == Regions.SIZE && hb.originZ == 0, "slot 1 is the second square of the top row");
         Check.that(b.gpu instanceof GpuPages.Handle h && h.ready, "second page ready");
         same(gpu, a, "first page after its full upload");
         same(gpu, b, "second page after its full upload");
         FakeGpu.Texture texture = gpu.textureOf(a);
         Check.eq(GpuFormat.RGBA8_UNORM, texture.getFormat(), "texture format");
-        Check.eq(Regions.SIZE, texture.getWidth(0), "texture width");
+        Check.eq(GpuPages.ATLAS_SIZE, texture.getWidth(0), "texture width");
+        Check.eq(2048, texture.getHeight(0), "texture height");
+
+        // The white patch: sixteen texels square at the start of the last slot, and the texture
+        // coordinate the flat-coloured quads use is its middle. Around it the texture is still junk.
+        int patch = 3 * Regions.SIZE;
+        int white = 0;
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                int at = ((patch + z) * 2048 + patch + x) * 4;
+                if (texture.bytes[at] == -1 && texture.bytes[at + 1] == -1 && texture.bytes[at + 2] == -1 && texture.bytes[at + 3] == -1) {
+                    white++;
+                }
+            }
+        }
+        Check.eq(256, white, "white patch is 16 by 16 opaque white texels");
+        Check.eq((byte) 0x5A, texture.bytes[((patch + 16) * 2048 + patch) * 4], "nothing written below the patch");
+        Check.eq((byte) 0x5A, texture.bytes[(patch * 2048 + patch + 16) * 4], "nor to its right");
+        Check.near((patch + 8) / 2048.0, GpuPages.WHITE_UV, 1e-7, "the white coordinate is the middle of the patch");
+
+        // Texture coordinates of a slot: its exact edges for texel-by-texel sampling, half a
+        // texel inside them for smooth sampling so the neighbouring slot never mixes in.
+        Check.near((512 + 1 / 64.0) / 2048.0, hb.u0, 1e-7, "slot 1 left edge, a sliver in");
+        Check.near((1024 - 1 / 64.0) / 2048.0, hb.u1, 1e-7, "slot 1 right edge, a sliver in");
+        Check.near((1 / 64.0) / 2048.0, hb.v0, 1e-7, "slot 1 top edge, a sliver in");
+        Check.near((512 - 1 / 64.0) / 2048.0, hb.v1, 1e-7, "slot 1 bottom edge, a sliver in");
+        Check.that(hb.u0 * 2048 > 512 && hb.u1 * 2048 < 1024 && hb.v0 > 0 && hb.v1 * 2048 < 512, "texel-by-texel sampling stays strictly inside the slot");
+        Check.near(512.5 / 2048.0, hb.su0, 1e-7, "smooth: half a texel in from the left");
+        Check.near(1023.5 / 2048.0, hb.su1, 1e-7, "smooth: half a texel in from the right");
+        Check.near(0.5 / 2048.0, hb.sv0, 1e-7, "smooth: half a texel in from the top");
+        Check.near(511.5 / 2048.0, hb.sv1, 1e-7, "smooth: half a texel in from the bottom");
         Check.eq(GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_TEXTURE_BINDING, texture.usage(), "texture usage");
 
         // Byte order: the texture's first byte of a pixel is red.
-        int index = ((3 * 16) << Regions.SHIFT) + 2 * 16;
+        int index = (3 * 16) * GpuPages.ATLAS_SIZE + 2 * 16;
         int rgb = tables.palette.rgb[stone];
         Check.that((texture.bytes[index * 4] & 0xFF) > 0 && texture.bytes[index * 4 + 3] == (byte) 0xFF, "pixel is opaque and coloured");
         Check.eq((rgb >> 16 & 0xFF) * 220 / 255, texture.bytes[index * 4] & 0xFF, "red byte first (level ground is shaded 220/255)");
@@ -153,8 +192,75 @@ final class UploadTests {
             GpuPages.close(page, stats);
         }
         Check.that(gpu.textures.stream().allMatch(t -> t.closed), "all textures closed");
-        Check.eq(2L, stats.clientTexturesCreated, "two textures created in total");
-        Check.eq(2L, stats.clientTexturesClosed, "and two closed");
+        Check.eq(1L, stats.clientTexturesCreated, "one atlas created in total");
+        Check.eq(1L, stats.clientTexturesClosed, "and closed with its last page");
+        Check.eq(0, GpuPages.atlases(), "no atlas left open");
+
+        slots(tables, gpu);
+    }
+
+    /** More pages than one atlas holds, and slots handed back and reused. */
+    private static void slots(StateTables tables, FakeGpu gpu) {
+        Stats stats = new Stats();
+        PageStore store = new PageStore(null, 64, stats);
+        store.open(tables.palette, tables);
+        int stone = GameTests.id(net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+        int texturesBefore = gpu.textures.size();
+
+        // Seventeen regions in a row, each with one chunk of a different height.
+        List<RegionPage> pages = new ArrayList<>();
+        for (int r = 0; r < 17; r++) {
+            store.applyChunk(r * 32 + 1, 1, chunk(stone, 60 + r), SECOND);
+            pages.add(store.pollEvent());
+        }
+        for (int tick = 0; tick < 40; tick++) {
+            GpuPages.upload(store, stats, 4 << 20);
+        }
+        Check.eq(2, gpu.textures.size() - texturesBefore, "seventeen pages need two atlases");
+        Check.eq(2, GpuPages.atlases(), "two atlases open");
+        java.util.Set<Long> places = new java.util.HashSet<>();
+        for (int r = 0; r < 17; r++) {
+            GpuPages.Handle handle = (GpuPages.Handle) pages.get(r).gpu;
+            Check.that(handle != null && handle.ready, "page " + r + " uploaded");
+            Check.that(handle.slot >= 0 && handle.slot < GpuPages.PAGES_PER_ATLAS, "page " + r + " is in a page slot, not the white one");
+            Check.that(places.add(((long) System.identityHashCode(handle.atlas) << 8) | handle.slot), "page " + r + " has a slot of its own");
+            same(gpu, pages.get(r), "page " + r + " in its slot");
+        }
+        GpuPages.Handle first = (GpuPages.Handle) pages.get(0).gpu;
+        GpuPages.Handle last = (GpuPages.Handle) pages.get(16).gpu;
+        Check.that(((GpuPages.Handle) pages.get(14).gpu).atlas == first.atlas && ((GpuPages.Handle) pages.get(15).gpu).atlas == last.atlas,
+                "the first fifteen fill the first atlas, the rest go to the second");
+        Check.that(first.linear != last.linear, "different atlases are different textures");
+
+        // A page that leaves gives its slot back, and the next new page takes it: the pages in
+        // use stay together on the first atlas.
+        GpuPages.close(pages.get(3), stats);
+        Check.eq(null, pages.get(3).gpu, "closed page has no slot");
+        store.applyChunk(40 * 32 + 1, 1, chunk(stone, 90), 2 * SECOND);
+        RegionPage late = store.pollEvent();
+        for (int tick = 0; tick < 10; tick++) {
+            GpuPages.upload(store, stats, 4 << 20);
+        }
+        GpuPages.Handle reused = (GpuPages.Handle) late.gpu;
+        Check.that(reused.atlas == first.atlas && reused.slot == 3 && reused.ready, "the freed slot is reused");
+        same(gpu, late, "new page in the reused slot");
+        same(gpu, pages.get(2), "its neighbour on one side is untouched");
+        same(gpu, pages.get(4), "and on the other");
+
+        // The second atlas closes as soon as its last page goes; the first stays while used.
+        GpuPages.close(pages.get(15), stats);
+        Check.eq(2, GpuPages.atlases(), "second atlas still has a page");
+        GpuPages.close(pages.get(16), stats);
+        Check.eq(1, GpuPages.atlases(), "second atlas closed with its last page");
+        Check.that(((FakeGpu.Texture) last.texture).closed && !((FakeGpu.Texture) first.texture).closed, "only the empty one was closed");
+        GpuPages.close(late, stats);
+        for (int r = 0; r < 15; r++) {
+            GpuPages.close(pages.get(r), stats);
+        }
+        Check.eq(0, GpuPages.atlases(), "no atlas left open");
+        Check.eq(2L, stats.clientTexturesCreated, "two atlases created");
+        Check.eq(2L, stats.clientTexturesClosed, "two closed");
+        store.close();
     }
 
     private static FakeGpu installed;
@@ -184,14 +290,18 @@ final class UploadTests {
         return c;
     }
 
-    /** The texture holds the page's pixels, byte for byte, in R, G, B, A order. */
+    /** Whether the page's slot of its atlas holds exactly the page's pixels. */
     private static void same(FakeGpu gpu, RegionPage page, String what) {
+        GpuPages.Handle handle = (GpuPages.Handle) page.gpu;
         byte[] bytes = gpu.textureOf(page).bytes;
         int wrong = 0;
-        for (int i = 0; i < Regions.AREA; i++) {
-            int p = page.pixels[i];
-            if (bytes[i * 4] != (byte) p || bytes[i * 4 + 1] != (byte) (p >> 8) || bytes[i * 4 + 2] != (byte) (p >> 16) || bytes[i * 4 + 3] != (byte) (p >>> 24)) {
-                wrong++;
+        for (int z = 0; z < Regions.SIZE; z++) {
+            for (int x = 0; x < Regions.SIZE; x++) {
+                int p = page.pixels[(z << Regions.SHIFT) + x];
+                int at = ((handle.originZ + z) * GpuPages.ATLAS_SIZE + handle.originX + x) * 4;
+                if (bytes[at] != (byte) p || bytes[at + 1] != (byte) (p >> 8) || bytes[at + 2] != (byte) (p >> 16) || bytes[at + 3] != (byte) (p >>> 24)) {
+                    wrong++;
+                }
             }
         }
         Check.eq(0, wrong, "wrong pixels in texture, " + what);

@@ -15,6 +15,9 @@ import java.util.Arrays;
 /**
  * One quad for the game's GUI renderer, either a map page or a flat colour.
  *
+ * <p>A flat-coloured quad can be drawn without a texture, or from the white patch of a page atlas
+ * (see {@link #white}). The second looks the same and lets it share a draw call with the pages.
+ *
  * <p>The GUI is rebuilt from render states every frame. The stock drawing helpers allocate a new
  * state, matrix and rectangle per call; the map instead keeps a handful of these and only rewrites
  * their corners, so drawing it allocates nothing. Corners are stored already transformed, in GUI
@@ -23,6 +26,8 @@ import java.util.Arrays;
  */
 final class MapQuad implements GuiElementRenderState {
     private float x0, y0, x1, y1, x2, y2, x3, y3;
+    /** Texture coordinates of the first and the third corner; the other two mix them. */
+    private float u0, v0, u1 = 1f, v1 = 1f;
     private int color = -1;
     private @Nullable TextureSetup texture;
     private @Nullable ScreenRectangle scissor;
@@ -45,15 +50,61 @@ final class MapQuad implements GuiElementRenderState {
     }
 
     /**
-     * A region's page, placed by the view transform and clipped to {@code clip} if given. The
+     * A region's page, placed by the view transform and clipped to {@code clip} if given. It shows
+     * the page's slot of its atlas, sampled smoothly or texel by texel. The
      * colour multiplies the texture: white for the page as it is, a lower alpha to see through it.
      */
+    void page(MapView view, int rx, int rz, GpuPages.Handle handle, boolean smooth, int argb, @Nullable ScreenRectangle clip, ScreenRectangle bounds) {
+        region(view, rx, rz);
+        this.color = argb;
+        if (smooth) {
+            this.texture = handle.linear;
+            u0 = handle.su0;
+            v0 = handle.sv0;
+            u1 = handle.su1;
+            v1 = handle.sv1;
+        } else {
+            this.texture = handle.nearest;
+            u0 = handle.u0;
+            v0 = handle.v0;
+            u1 = handle.u1;
+            v1 = handle.v1;
+        }
+        this.scissor = clip;
+        this.bounds = bounds;
+    }
+
+    /** The same, showing the whole of a texture of its own. */
     void page(MapView view, int rx, int rz, TextureSetup texture, int argb, @Nullable ScreenRectangle clip, ScreenRectangle bounds) {
         region(view, rx, rz);
         this.color = argb;
         this.texture = texture;
+        u0 = 0f;
+        v0 = 0f;
+        u1 = 1f;
+        v1 = 1f;
         this.scissor = clip;
         this.bounds = bounds;
+    }
+
+    /**
+     * Makes this flat-coloured quad sample the white patch of the atlas behind {@code atlas}
+     * instead of using no texture. Call after {@code blank}, {@code fill}, {@code dot} or
+     * {@code arrow}; a null atlas leaves the quad as it is.
+     */
+    void white(@Nullable TextureSetup atlas) {
+        if (atlas != null) {
+            this.texture = atlas;
+            u0 = GpuPages.WHITE_UV;
+            v0 = GpuPages.WHITE_UV;
+            u1 = GpuPages.WHITE_UV;
+            v1 = GpuPages.WHITE_UV;
+        }
+    }
+
+    /** Whether this quad is drawn with a texture. */
+    boolean textured() {
+        return texture != null;
     }
 
     /** A region with nothing to show yet: the same square as its page would cover, in one colour. */
@@ -106,7 +157,7 @@ final class MapQuad implements GuiElementRenderState {
      * A small arrowhead at a screen position, pointing along the unit vector (dirX, dirY) in
      * screen space. Drawn as a quad with two coincident corners.
      */
-    void arrow(float x, float y, float dirX, float dirY, float size, int argb, ScreenRectangle bounds) {
+    void arrow(float x, float y, float dirX, float dirY, float size, int argb, @Nullable ScreenRectangle clip, ScreenRectangle bounds) {
         float backX = x - dirX * size * 0.7f;
         float backY = y - dirY * size * 0.7f;
         // (sideX, sideY) is the direction turned a quarter clockwise on screen: to the arrow's right.
@@ -123,17 +174,17 @@ final class MapQuad implements GuiElementRenderState {
         y3 = y2;
         this.color = argb;
         this.texture = null;
-        this.scissor = null;
+        this.scissor = clip;
         this.bounds = bounds;
     }
 
     @Override
     public void buildVertices(VertexConsumer out) {
         if (texture != null) {
-            out.addVertex(x0, y0, 0f).setUv(0f, 0f).setColor(color);
-            out.addVertex(x1, y1, 0f).setUv(0f, 1f).setColor(color);
-            out.addVertex(x2, y2, 0f).setUv(1f, 1f).setColor(color);
-            out.addVertex(x3, y3, 0f).setUv(1f, 0f).setColor(color);
+            out.addVertex(x0, y0, 0f).setUv(u0, v0).setColor(color);
+            out.addVertex(x1, y1, 0f).setUv(u0, v1).setColor(color);
+            out.addVertex(x2, y2, 0f).setUv(u1, v1).setColor(color);
+            out.addVertex(x3, y3, 0f).setUv(u1, v0).setColor(color);
         } else {
             out.addVertex(x0, y0, 0f).setColor(color);
             out.addVertex(x1, y1, 0f).setColor(color);

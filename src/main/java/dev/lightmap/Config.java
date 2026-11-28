@@ -12,7 +12,7 @@ public final class Config {
     public static final float MINIMAP_ZOOM = Math.clamp(number("lightmap.minimap.zoom", 1f), 0.25f, 16f);
     /** Keep the recorded map on disk between sessions. Off keeps it in memory only. */
     public static final boolean PERSIST = flag("lightmap.persist", true);
-    /** Most region pages held in memory (about 2.8 MB each plus a 1 MB texture). */
+    /** Most region pages held in memory (about 2.8 MB each; on the GPU fifteen share a 16 MB atlas). */
     public static final int MAX_PAGES = Math.clamp(integer("lightmap.pages", 96), 16, 1024);
     /** Most pixel data sent to the GPU per client tick, in bytes. */
     public static final int UPLOAD_BYTES_PER_TICK = Math.clamp(integer("lightmap.uploadBytesPerTick", 1 << 20), 1 << 10, 1 << 26);

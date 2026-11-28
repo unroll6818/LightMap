@@ -474,14 +474,14 @@ public final class GameTests {
             Check.eq(reference, Math.signum(rotated.turn()), "page facing at yaw " + degrees);
 
             double heading = Math.toRadians(degrees);
-            arrow.arrow(50, 50, (float) -Math.sin(heading), (float) Math.cos(heading), 4f, -1, area);
+            arrow.arrow(50, 50, (float) -Math.sin(heading), (float) Math.cos(heading), 4f, -1, null, area);
             Vertices a = new Vertices();
             arrow.buildVertices(a);
             Check.eq(reference, Math.signum(a.turn()), "marker facing at yaw " + degrees);
         }
 
         // The marker's tip is in the direction it is given: up the screen for (0,-1).
-        arrow.arrow(50, 50, 0, -1, 4f, -1, area);
+        arrow.arrow(50, 50, 0, -1, 4f, -1, null, area);
         Vertices up = new Vertices();
         arrow.buildVertices(up);
         Check.that(up.list.get(0)[1] < 50 && up.list.get(1)[1] > 50 && up.list.get(2)[1] > 50, "marker tip points up");

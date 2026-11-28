@@ -10,6 +10,7 @@ import dev.lightmap.core.Regions;
 import dev.lightmap.mixin.GuiGraphicsExtractorAccessor;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
+import net.minecraft.client.gui.render.TextureSetup;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
@@ -139,6 +140,9 @@ public final class WorldMapScreen extends Screen {
         boolean smooth = zoom < 1f;
         long now = System.nanoTime();
         int used = 0;
+        // Markers and the arrow sample the white patch of the first page's atlas, so they are
+        // drawn in the same call as the pages on it.
+        TextureSetup atlas = null;
         for (int rz = rz0; rz <= rz1; rz++) {
             for (int rx = rx0; rx <= rx1; rx++) {
                 long key = Regions.key(rx, rz);
@@ -152,7 +156,10 @@ public final class WorldMapScreen extends Screen {
                     continue;
                 }
                 MapQuad quad = pageQuad(used++);
-                quad.page(view, rx, rz, smooth ? handle.linear : handle.nearest, -1, null, area);
+                quad.page(view, rx, rz, handle, smooth, -1, null, area);
+                if (atlas == null) {
+                    atlas = quad.textureSetup();
+                }
                 state.addGlyphToCurrentLayer(quad);
             }
         }
@@ -168,6 +175,7 @@ public final class WorldMapScreen extends Screen {
             markerQuads = MapQuad.pool(markerQuads, dots);
             MapQuad dot = markerQuads[dots++];
             dot.dot(sx, sy, half, m.argb(), null, area);
+            dot.white(atlas);
             state.addGlyphToCurrentLayer(dot);
         }
 
@@ -175,7 +183,8 @@ public final class WorldMapScreen extends Screen {
         if (camera != null && camera.level() == session.level) {
             float heading = camera.getViewYRot(partial) * Mth.DEG_TO_RAD;
             marker.arrow(view.screenX(camera.getX(), camera.getZ()), view.screenY(camera.getX(), camera.getZ()),
-                    -Mth.sin(heading), Mth.cos(heading), 10f / guiScale(), MinimapHud.MARKER, area);
+                    -Mth.sin(heading), Mth.cos(heading), 10f / guiScale(), MinimapHud.MARKER, null, area);
+            marker.white(atlas);
             state.addGlyphToCurrentLayer(marker);
         }
     }
