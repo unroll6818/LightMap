@@ -11,6 +11,7 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.Locale;
 import java.util.Properties;
 
 /**
@@ -21,7 +22,7 @@ import java.util.Properties;
  * file and is never written back to it, so a benchmark run can pin a value without touching what
  * the player chose. A setting pinned that way is shown locked in the settings screen.
  *
- * <p>The fields are plain ints and booleans written from the client thread only; the minimap reads
+ * <p>The fields are plain values written from the client thread only; the minimap reads
  * them once per frame.
  */
 public final class Settings {
@@ -29,7 +30,31 @@ public final class Settings {
     public static final String OPACITY = "lightmap.minimap.opacity";
     public static final String SIZE = "lightmap.minimap.size";
     public static final String ROTATE = "lightmap.minimap.rotate";
-    public static final String DISTINCT_MARKERS = "lightmap.minimap.markers.distinct";
+    public static final String MARKER_SIZE = "lightmap.minimap.markers.size";
+    public static final String LABEL_SCALE = "lightmap.minimap.labels.scale";
+    public static final String PLAYERS = "lightmap.minimap.players";
+    /** Version 0.4's on/off marker style, read once when the newer key is absent. */
+    private static final String LEGACY_DISTINCT_MARKERS = "lightmap.minimap.markers.distinct";
+
+    /** How markers are drawn on the minimap: small and plain, or outlined in two sizes. */
+    public enum MarkerSize { SMALL, MEDIUM, LARGE }
+
+    /** What the minimap shows for other players the client knows about. */
+    public enum Players {
+        OFF, HEADS, NAMES, BOTH;
+
+        public boolean heads() {
+            return this == HEADS || this == BOTH;
+        }
+
+        public boolean names() {
+            return this == NAMES || this == BOTH;
+        }
+    }
+
+    public static final int LABEL_SCALE_MIN = 50;
+    public static final int LABEL_SCALE_MAX = 300;
+    public static final int LABEL_SCALE_STEP = 25;
 
     public static final int SIZE_MIN = 64;
     public static final int SIZE_MAX = 1024;
@@ -42,7 +67,9 @@ public final class Settings {
     private static int opacity = 100;
     private static int size = 368;
     private static boolean rotate = true;
-    private static boolean distinctMarkers = true;
+    private static MarkerSize markerSize = MarkerSize.MEDIUM;
+    private static int labelScale = 100;
+    private static Players players = Players.OFF;
     private static Path file;
 
     private Settings() {
@@ -68,13 +95,29 @@ public final class Settings {
         return rotate;
     }
 
-    /** Draw minimap markers larger and outlined; otherwise small and plain. */
-    public static boolean distinctMarkers() {
-        return distinctMarkers;
+    public static MarkerSize markerSize() {
+        return markerSize;
     }
 
-    public static void setDistinctMarkers(boolean value) {
-        distinctMarkers = value;
+    public static void setMarkerSize(MarkerSize value) {
+        markerSize = value;
+    }
+
+    /** Size of marker names and player names on the minimap, in percent of the game's text size. */
+    public static int labelScale() {
+        return labelScale;
+    }
+
+    public static void setLabelScale(int value) {
+        labelScale = Math.clamp(value, LABEL_SCALE_MIN, LABEL_SCALE_MAX);
+    }
+
+    public static Players players() {
+        return players;
+    }
+
+    public static void setPlayers(Players value) {
+        players = value;
     }
 
     public static void setMinimap(boolean value) {
@@ -114,7 +157,10 @@ public final class Settings {
         setOpacity(integer(stored, OPACITY, 100));
         setSize(integer(stored, SIZE, 368));
         setRotate(flag(stored, ROTATE, true));
-        setDistinctMarkers(flag(stored, DISTINCT_MARKERS, true));
+        MarkerSize legacy = flag(stored, LEGACY_DISTINCT_MARKERS, true) ? MarkerSize.MEDIUM : MarkerSize.SMALL;
+        setMarkerSize(choice(stored, MARKER_SIZE, MarkerSize.class, legacy));
+        setLabelScale(integer(stored, LABEL_SCALE, 100));
+        setPlayers(choice(stored, PLAYERS, Players.class, Players.OFF));
     }
 
     /**
@@ -139,7 +185,9 @@ public final class Settings {
         put(out, previous, OPACITY, Integer.toString(opacity));
         put(out, previous, SIZE, Integer.toString(size));
         put(out, previous, ROTATE, Boolean.toString(rotate));
-        put(out, previous, DISTINCT_MARKERS, Boolean.toString(distinctMarkers));
+        put(out, previous, MARKER_SIZE, markerSize.name().toLowerCase(Locale.ROOT));
+        put(out, previous, LABEL_SCALE, Integer.toString(labelScale));
+        put(out, previous, PLAYERS, players.name().toLowerCase(Locale.ROOT));
         try {
             Files.createDirectories(target.toAbsolutePath().getParent());
             Path temp = target.resolveSibling(target.getFileName() + ".tmp");
@@ -176,6 +224,18 @@ public final class Settings {
         }
         value = value.trim();
         return value.equalsIgnoreCase("true") || (!value.equalsIgnoreCase("false") && fallback);
+    }
+
+    private static <E extends Enum<E>> E choice(Properties stored, String key, Class<E> type, E fallback) {
+        String value = raw(stored, key);
+        if (value != null) {
+            for (E option : type.getEnumConstants()) {
+                if (option.name().equalsIgnoreCase(value.trim())) {
+                    return option;
+                }
+            }
+        }
+        return fallback;
     }
 
     private static int integer(Properties stored, String key, int fallback) {

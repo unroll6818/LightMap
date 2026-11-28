@@ -24,7 +24,9 @@ wrong, say so in the pull request.
 1. The minimap is never re-rendered per frame. The map lives in persistent GPU textures
    (512x512 per 32x32-chunk region) drawn as quads in the GUI pass.
 2. One render pass, no per-frame allocation of ours.
-3. Event-driven: no polling of the world. Work happens on chunk load and block change.
+3. Event-driven: no polling of the world. Work happens on chunk load and block change. The one
+   exception is the optional "other players" overlay, which reads the level's player list each
+   frame while it is switched on.
 4. Colouring off the client thread: the client thread snapshots, the worker resolves and colours.
 5. Upload only changed sub-rectangles, within the per-tick byte budget.
 6. Minimap and world map share the same pages.

@@ -167,7 +167,7 @@ public final class WorldMapScreen extends Screen {
             }
             markerQuads = MapQuad.pool(markerQuads, dots);
             MapQuad dot = markerQuads[dots++];
-            dot.dot(sx, sy, half, MinimapHud.PLACED_MARKER, null, area);
+            dot.dot(sx, sy, half, m.argb(), null, area);
             state.addGlyphToCurrentLayer(dot);
         }
 
