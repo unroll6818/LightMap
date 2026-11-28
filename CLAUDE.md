@@ -22,7 +22,9 @@ wrong, say so in the pull request.
 ## Performance targets (in priority order)
 
 1. The minimap is never re-rendered per frame. The map lives in persistent GPU textures
-   (512x512 per 32x32-chunk region) drawn as quads in the GUI pass.
+   (a 512x512 slot per 32x32-chunk region, fifteen slots to an atlas) drawn as quads in the GUI
+   pass. Everything the minimap draws shares one texture, pipeline and clip rectangle, so it is
+   one draw call; a self-test counts them. Keep it that way.
 2. One render pass, no per-frame allocation of ours.
 3. Event-driven: no polling of the world. Work happens on chunk load and block change. The one
    exception is the optional "other players" overlay, which reads the level's player list each

@@ -16,6 +16,7 @@ import net.minecraft.client.gui.components.PlayerFaceExtractor;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
+import net.minecraft.client.gui.render.TextureSetup;
 import net.minecraft.client.renderer.state.gui.GuiRenderState;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
@@ -28,7 +29,7 @@ import java.util.List;
  * game's GUI pass.
  *
  * <p>There is no off-screen target and no extra render pass. The map image already lives in the
- * page textures, so a frame only has to say where the up to four regions in view go: the rotation
+ * page atlas, so a frame only has to say where the up to four regions in view go: the rotation
  * and zoom are applied to the quad corners, and the GUI renderer's scissor rectangle cuts the
  * result down to the square. That is a handful of vertices per frame and no allocation.
  *
@@ -237,27 +238,53 @@ public final class MinimapHud implements HudElement {
         boolean smooth = rotate || Config.MINIMAP_ZOOM != Math.rint(Config.MINIMAP_ZOOM);
         long now = System.nanoTime();
         int used = 0;
+        // The texture everything is drawn from this frame: the atlas of the first page in view.
+        TextureSetup atlas = null;
         for (int rz = rz0; rz <= rz1; rz++) {
             for (int rx = rx0; rx <= rx1; rx++) {
                 long key = Regions.key(rx, rz);
                 RegionPage page = session.page(key);
-                MapQuad quad = quad(used);
+                MapQuad quad = quad(used++);
                 if (page == null) {
                     session.want(key, now);
                     quad.blank(view, rx, rz, blankColor, area, area);
                 } else {
                     page.keepAliveAt = now;
                     if (page.gpu instanceof GpuPages.Handle handle && handle.ready) {
-                        quad.page(view, rx, rz, smooth ? handle.linear : handle.nearest, pageColor, area, area);
+                        quad.page(view, rx, rz, handle, smooth, pageColor, area, area);
+                        if (atlas == null) {
+                            atlas = quad.textureSetup();
+                        }
                     } else {
                         quad.blank(view, rx, rz, blankColor, area, area);
                     }
                 }
-                // The first quad goes through the normal path, which finds the right layer for
-                // this part of the screen. The others and the marker never overlap it or each
-                // other, so they join that layer directly instead of opening one layer each.
-                if (used++ == 0) {
+            }
+        }
+
+        // The GUI renderer starts a new draw call whenever the texture, the pipeline or the
+        // clip rectangle changes from one quad to the next. So everything here uses one clip
+        // rectangle, the flat-coloured quads sample the atlas's white patch instead of going
+        // untextured, and pages on some other atlas (rare: only with more than fifteen pages
+        // loaded) are sent first. The whole minimap is then one draw call, or two.
+        //
+        // The first quad goes through the normal path, which finds the right layer for this
+        // part of the screen. The others never overlap it or each other, so they join that
+        // layer directly instead of opening one layer each.
+        boolean first = true;
+        for (int pass = atlas == null ? 1 : 0; pass < 2; pass++) {
+            for (int i = 0; i < used; i++) {
+                MapQuad quad = pageQuads[i];
+                boolean elsewhere = quad.textured() && quad.textureSetup() != atlas;
+                if (elsewhere != (pass == 0)) {
+                    continue;
+                }
+                if (!quad.textured()) {
+                    quad.white(atlas);
+                }
+                if (first) {
                     state.addGuiElement(quad);
+                    first = false;
                 } else {
                     state.addGlyphToCurrentLayer(quad);
                 }
@@ -286,11 +313,13 @@ public final class MinimapHud implements HudElement {
                 markerQuads = MapQuad.pool(markerQuads, dots);
                 MapQuad edge = markerQuads[dots++];
                 edge.dot(sx, sy, outline, outlineColor, area, area);
+                edge.white(atlas);
                 state.addGlyphToCurrentLayer(edge);
             }
             markerQuads = MapQuad.pool(markerQuads, dots);
             MapQuad dot = markerQuads[dots++];
             dot.dot(sx, sy, half, alpha | (m.argb() & 0xFFFFFF), area, area);
+            dot.white(atlas);
             state.addGlyphToCurrentLayer(dot);
         }
 
@@ -301,7 +330,8 @@ public final class MinimapHud implements HudElement {
             dirX = -Mth.sin(heading);
             dirY = Mth.cos(heading);
         }
-        marker.arrow(centre, centre, dirX, dirY, 8f / guiScale, alpha | (MARKER & 0xFFFFFF), area);
+        marker.arrow(centre, centre, dirX, dirY, 8f / guiScale, alpha | (MARKER & 0xFFFFFF), area, area);
+        marker.white(atlas);
         state.addGlyphToCurrentLayer(marker);
         return true;
     }

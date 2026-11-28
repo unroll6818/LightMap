@@ -3,6 +3,12 @@ package dev.lightmap.mc;
 import com.mojang.authlib.GameProfile;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.platform.Window;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.GpuFormat;
+import com.mojang.renderpearl.api.device.GpuDevice;
+import com.mojang.renderpearl.api.textures.FilterMode;
+import com.mojang.renderpearl.api.textures.GpuTexture;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
 import dev.lightmap.LightMapClient;
 import dev.lightmap.Settings;
 import dev.lightmap.core.Check;
@@ -107,7 +113,7 @@ final class ScreenTests {
             Check.eq(2304L, session.stats.clientChunksCaptured, "chunks captured");
             Check.eq(2304L, session.stats.workerChunksApplied, "chunks applied");
             int ticks = settle(session);
-            Check.eq(4, gpu.textures.size() - texturesBefore, "one texture per region");
+            Check.eq(1, gpu.textures.size() - texturesBefore, "the four regions share one atlas texture");
             Check.that(ticks >= 4, "new pages went out over several ticks, 1 MB each (" + ticks + ")");
             long callsWhenSettled = session.stats.clientUploadCalls;
             for (int i = 0; i < 100; i++) {
@@ -145,6 +151,7 @@ final class ScreenTests {
                 Check.that(waiting.get(i).textureSetup() == TextureSetup.noTexture(), "blank region " + i + " has no texture");
                 Check.eq(MinimapHud.BACKDROP, vertices(waiting.get(i)).color, "blank region " + i + " is the unexplored colour");
             }
+            Check.eq(1, drawCalls(waiting), "with no page to share a texture with, everything is untextured: still one draw call");
             Check.that(worker.await(60_000), "regions loaded from disk");
             settle(again);
             state = new GuiRenderState();
@@ -201,7 +208,7 @@ final class ScreenTests {
                         double ez = (rz * 512 + 512 - CAMERA_Z) * 0.5;
                         GameTests.vertex(v.list.get(2),
                                 (float) (centre + ex * Math.cos(angle) - ez * Math.sin(angle)),
-                                (float) (centre + ex * Math.sin(angle) + ez * Math.cos(angle)), 1f, 1f,
+                                (float) (centre + ex * Math.sin(angle) + ez * Math.cos(angle)), handle.su1, handle.sv1,
                                 "south-east corner of region " + rx + "," + rz);
                     }
                 }
@@ -210,9 +217,33 @@ final class ScreenTests {
         Check.eq(4, matched.size(), "all four regions around the camera are placed correctly");
 
         GameTests.Vertices marker = vertices(drawn.get(4));
-        GameTests.vertex(marker.list.get(0), centre, centre - 4f, Float.NaN, Float.NaN, "marker tip points up from the centre");
-        Check.eq(null, drawn.get(4).scissorArea(), "marker is not clipped");
+        GameTests.vertex(marker.list.get(0), centre, centre - 4f, GpuPages.WHITE_UV, GpuPages.WHITE_UV, "marker tip points up from the centre");
+        Check.eq(square, drawn.get(4).scissorArea(), "the arrow has the same clip rectangle as the pages");
 
+        // The point of the shared atlas: the GUI renderer starts a new draw call whenever the
+        // pipeline, the clip rectangle or the texture changes between two consecutive quads.
+        // Counted by that same rule, the whole minimap is one draw call.
+        Check.eq(1, drawCalls(drawn), "pages and arrow are one draw call");
+        GameTests.Vertices arrow = vertices(drawn.get(4));
+        Check.that(drawn.get(4).textureSetup() == drawn.get(0).textureSetup(), "the arrow is drawn from the pages' atlas");
+        Check.near(GpuPages.WHITE_UV, arrow.list.get(0)[2], 1e-7, "sampling its white patch (u)");
+        Check.near(GpuPages.WHITE_UV, arrow.list.get(2)[3], 1e-7, "sampling its white patch (v)");
+        // A page shows exactly its slot, pulled in half a texel because the minimap is smoothed.
+        for (int i = 0; i < 4; i++) {
+            GameTests.Vertices v = vertices(drawn.get(i));
+            float[] a = v.list.get(0);
+            float[] c = v.list.get(2);
+            boolean slot = false;
+            for (int rz = -1; rz <= 0; rz++) {
+                for (int rx = -1; rx <= 0; rx++) {
+                    GpuPages.Handle handle = (GpuPages.Handle) session.page(Regions.key(rx, rz)).gpu;
+                    slot |= a[2] == handle.su0 && a[3] == handle.sv0 && c[2] == handle.su1 && c[3] == handle.sv1;
+                }
+            }
+            Check.that(slot, "page quad " + i + " shows one page's slot, half a texel in");
+        }
+
+        twoAtlases(session, hud, square);
         settings(hud);
 
         // Nothing is drawn for a camera in some other level.
@@ -249,6 +280,40 @@ final class ScreenTests {
         Check.that(perFrame < 400, "a minimap frame allocates next to nothing (" + Math.round(perFrame) + " bytes)");
     }
 
+    /**
+     * With more than fifteen pages loaded, the pages in view can sit on two atlases. Then the
+     * quads on the other atlas go first and everything else follows in one run: two draw calls.
+     */
+    private static void twoAtlases(MapSession session, MinimapHud hud, ScreenRectangle square) throws Exception {
+        RegionPage page = session.page(Regions.key(0, -1));
+        Object original = page.gpu;
+        GpuDevice device = RenderSystem.getDevice();
+        GpuTexture texture = device.createTexture(() -> "second atlas", GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_TEXTURE_BINDING,
+                GpuFormat.RGBA8_UNORM, GpuPages.ATLAS_SIZE, GpuPages.ATLAS_SIZE, 1, 1);
+        GpuTextureView view = device.createTextureView(texture);
+        GpuPages.Atlas other = new GpuPages.Atlas(texture, view,
+                TextureSetup.singleTexture(view, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST)),
+                TextureSetup.singleTexture(view, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR)));
+        GpuPages.Handle elsewhere = new GpuPages.Handle(other, 7);
+        elsewhere.ready = true;
+        page.gpu = elsewhere;
+        try {
+            List<GuiElementRenderState> drawn = draw(hud);
+            Check.eq(5, drawn.size(), "two atlases: same quads");
+            Check.eq(2, drawCalls(drawn), "two atlases: two draw calls");
+            Check.that(drawn.get(0).textureSetup() == other.linear, "the page on the other atlas is sent first");
+            Check.that(drawn.get(1).textureSetup() != other.linear && drawn.get(4).textureSetup() == drawn.get(1).textureSetup(),
+                    "then the rest, the arrow included, from the first atlas");
+            Check.eq(square, drawn.get(0).scissorArea(), "all with the same clip rectangle");
+            float[] corner = vertices(drawn.get(0)).list.get(0);
+            Check.that(corner[2] == elsewhere.su0 && corner[3] == elsewhere.sv0, "and that page shows its own slot (7) of its atlas");
+        } finally {
+            page.gpu = original;
+            texture.close();
+            view.close();
+        }
+    }
+
     /** The settings take effect on the next frame, without a restart. */
     private static void settings(MinimapHud hud) {
         try {
@@ -271,7 +336,7 @@ final class ScreenTests {
             Settings.setSize(256);
             drawn = draw(hud);
             Check.eq(new ScreenRectangle(5, 5, 128, 128), drawn.get(0).scissorArea(), "size 256 px: a 128-unit square at GUI scale 2");
-            GameTests.vertex(vertices(drawn.getLast()).list.get(0), 69f, 65f, Float.NaN, Float.NaN, "and the marker moves to its centre");
+            GameTests.vertex(vertices(drawn.getLast()).list.get(0), 69f, 65f, GpuPages.WHITE_UV, GpuPages.WHITE_UV, "and the marker moves to its centre");
             Settings.setSize(368);
 
             // North up: region (0, 0)'s north-west corner is the world origin, straight from the definition.
@@ -285,7 +350,7 @@ final class ScreenTests {
             Check.that(found, "rotation off: north is up");
             double heading = Math.toRadians(YAW);
             GameTests.vertex(vertices(drawn.get(4)).list.get(0), (float) (97 - Math.sin(heading) * 4), (float) (97 + Math.cos(heading) * 4),
-                    Float.NaN, Float.NaN, "rotation off: the marker turns instead");
+                    GpuPages.WHITE_UV, GpuPages.WHITE_UV, "rotation off: the marker turns instead");
         } finally {
             Settings.setOpacity(100);
             Settings.setMinimap(true);
@@ -316,12 +381,22 @@ final class ScreenTests {
         screen.submit(state, 1f);
         List<GuiElementRenderState> drawn = elements(state);
         Check.eq(6, drawn.size(), "world map draws a background, four pages and a marker");
+        Check.eq(2, drawCalls(drawn), "world map: the untextured background, then pages and arrow in one draw call");
+        boolean exact = false;
+        for (int rz = -1; rz <= 0; rz++) {
+            for (int rx = -1; rx <= 0; rx++) {
+                GpuPages.Handle handle = (GpuPages.Handle) session.page(Regions.key(rx, rz)).gpu;
+                float[] corner = vertices(drawn.get(1)).list.get(0);
+                exact |= drawn.get(1).textureSetup() == handle.nearest && corner[2] == handle.u0 && corner[3] == handle.v0;
+            }
+        }
+        Check.that(exact, "at one pixel per block a page is sampled texel by texel, from its slot's own edges");
         GameTests.Vertices background = vertices(drawn.get(0));
         GameTests.vertex(background.list.get(2), 640, 360, Float.NaN, Float.NaN, "background covers the screen");
         Check.that(placed(drawn, session, 320, 180, CAMERA_X, CAMERA_Z, 0.5, false), "pages placed around the camera, sharp");
         double heading = Math.toRadians(YAW);
         GameTests.vertex(vertices(drawn.get(5)).list.get(0), (float) (320 - Math.sin(heading) * 5), (float) (180 + Math.cos(heading) * 5),
-                Float.NaN, Float.NaN, "marker at the camera, pointing the way it faces");
+                GpuPages.WHITE_UV, GpuPages.WHITE_UV, "marker at the camera, pointing the way it faces");
 
         // Scrolling in doubles the scale and keeps the block under the cursor in place.
         double underX = CAMERA_X + (400 - 320) / 0.5;
@@ -418,8 +493,8 @@ final class ScreenTests {
         float wx = (float) (320 + (140.5 - CAMERA_X) * 0.5);
         float wy = (float) (180 + (-90.5 - CAMERA_Z) * 0.5);
         GameTests.Vertices dot = vertices(drawn.get(5));
-        GameTests.vertex(dot.list.get(0), wx - 2, wy - 2, Float.NaN, Float.NaN, "world map marker, top-left corner");
-        GameTests.vertex(dot.list.get(2), wx + 2, wy + 2, Float.NaN, Float.NaN, "world map marker, bottom-right corner");
+        GameTests.vertex(dot.list.get(0), wx - 2, wy - 2, GpuPages.WHITE_UV, GpuPages.WHITE_UV, "world map marker, top-left corner");
+        GameTests.vertex(dot.list.get(2), wx + 2, wy + 2, GpuPages.WHITE_UV, GpuPages.WHITE_UV, "world map marker, bottom-right corner");
         Check.eq(YELLOW, dot.color, "world map marker colour");
         Check.that(dot.turn() < 0, "world map marker faces the viewer");
 
@@ -432,9 +507,9 @@ final class ScreenTests {
         double dz = (-90.5 - CAMERA_Z) * 0.5;
         float mx = (float) (97 + dx * Math.cos(angle) - dz * Math.sin(angle));
         float my = (float) (97 + dx * Math.sin(angle) + dz * Math.cos(angle));
-        GameTests.vertex(vertices(drawn.get(4)).list.get(0), mx - 1.5f, my - 1.5f, Float.NaN, Float.NaN, "minimap marker position");
+        GameTests.vertex(vertices(drawn.get(4)).list.get(0), mx - 1.5f, my - 1.5f, GpuPages.WHITE_UV, GpuPages.WHITE_UV, "minimap marker position");
         Check.eq(new ScreenRectangle(5, 5, 184, 184), drawn.get(4).scissorArea(), "minimap marker is clipped to the square");
-        GameTests.vertex(vertices(drawn.get(5)).list.get(0), 97f, 93f, Float.NaN, Float.NaN, "the arrow still comes last, on top");
+        GameTests.vertex(vertices(drawn.get(5)).list.get(0), 97f, 93f, GpuPages.WHITE_UV, GpuPages.WHITE_UV, "the arrow still comes last, on top");
         try {
             Settings.setOpacity(40);
             Check.eq(0x66000000 | (YELLOW & 0xFFFFFF), vertices(draw(hud).get(4)).color, "minimap marker follows the opacity");
@@ -448,12 +523,13 @@ final class ScreenTests {
             drawn = draw(hud);
             Check.eq(7, drawn.size(), "distinct: four pages, outline, marker and the arrow");
             GameTests.Vertices edge = vertices(drawn.get(4));
-            GameTests.vertex(edge.list.get(0), mx - 2.5f, my - 2.5f, Float.NaN, Float.NaN, "distinct: outline is 10 screen pixels wide");
+            GameTests.vertex(edge.list.get(0), mx - 2.5f, my - 2.5f, GpuPages.WHITE_UV, GpuPages.WHITE_UV, "distinct: outline is 10 screen pixels wide");
             Check.eq(MinimapHud.MARKER_OUTLINE, edge.color, "distinct: outline colour");
             GameTests.Vertices inner = vertices(drawn.get(5));
-            GameTests.vertex(inner.list.get(0), mx - 2f, my - 2f, Float.NaN, Float.NaN, "distinct: marker is 8 screen pixels wide, drawn over the outline");
+            GameTests.vertex(inner.list.get(0), mx - 2f, my - 2f, GpuPages.WHITE_UV, GpuPages.WHITE_UV, "distinct: marker is 8 screen pixels wide, drawn over the outline");
             Check.eq(YELLOW, inner.color, "distinct: marker colour");
             Check.eq(new ScreenRectangle(5, 5, 184, 184), drawn.get(4).scissorArea(), "distinct: outline is clipped to the square");
+            Check.eq(1, drawCalls(drawn), "pages, outline, marker and arrow are still one draw call");
         } finally {
             Settings.setMarkerSize(Settings.MarkerSize.SMALL);
         }
@@ -463,9 +539,9 @@ final class ScreenTests {
         try {
             drawn = draw(hud);
             Check.eq(7, drawn.size(), "large: four pages, outline, marker and the arrow");
-            GameTests.vertex(vertices(drawn.get(4)).list.get(0), mx - 3.5f, my - 3.5f, Float.NaN, Float.NaN, "large: outline is 14 screen pixels wide");
-            GameTests.vertex(vertices(drawn.get(5)).list.get(0), mx - 3f, my - 3f, Float.NaN, Float.NaN, "large: marker is 12 screen pixels wide");
-            GameTests.vertex(vertices(drawn.get(5)).list.get(2), mx + 3f, my + 3f, Float.NaN, Float.NaN, "large: marker, opposite corner");
+            GameTests.vertex(vertices(drawn.get(4)).list.get(0), mx - 3.5f, my - 3.5f, GpuPages.WHITE_UV, GpuPages.WHITE_UV, "large: outline is 14 screen pixels wide");
+            GameTests.vertex(vertices(drawn.get(5)).list.get(0), mx - 3f, my - 3f, GpuPages.WHITE_UV, GpuPages.WHITE_UV, "large: marker is 12 screen pixels wide");
+            GameTests.vertex(vertices(drawn.get(5)).list.get(2), mx + 3f, my + 3f, GpuPages.WHITE_UV, GpuPages.WHITE_UV, "large: marker, opposite corner");
         } finally {
             Settings.setMarkerSize(Settings.MarkerSize.SMALL);
         }
@@ -727,6 +803,25 @@ final class ScreenTests {
             Check.near(size, (float) item[4], 1e-6, what + " (size)");
             Check.eq(argb, item[5], what + " (colour)");
         }
+    }
+
+    /**
+     * How many draw calls the game's GUI renderer makes for these quads, by its own rule
+     * ({@code GuiRenderer.addElementToMesh}): a new one whenever the pipeline, the clip rectangle
+     * or the texture differs from the previous quad's.
+     */
+    private static int drawCalls(List<GuiElementRenderState> drawn) {
+        int calls = 0;
+        GuiElementRenderState previous = null;
+        for (GuiElementRenderState quad : drawn) {
+            if (previous == null || quad.pipeline() != previous.pipeline()
+                    || !java.util.Objects.equals(quad.scissorArea(), previous.scissorArea())
+                    || !quad.textureSetup().equals(previous.textureSetup())) {
+                calls++;
+            }
+            previous = quad;
+        }
+        return calls;
     }
 
     private static boolean namesInView(MinimapHud hud) throws Exception {

@@ -72,7 +72,7 @@ Start-up only, JVM system properties:
 | `lightmap.minimap.margin` | `10` | Gap to the top-left corner, in screen pixels. |
 | `lightmap.minimap.zoom` | `1` | Screen pixels per block. |
 | `lightmap.persist` | `true` | Save the map under `<game dir>/lightmap/`. `false` keeps it in memory only. |
-| `lightmap.pages` | `96` | Most region pages held in memory (about 2.8 MB each, plus a 1 MB texture once drawn). |
+| `lightmap.pages` | `96` | Most region pages held in memory (about 2.8 MB each; on the GPU, fifteen pages share one 16 MB atlas texture). |
 | `lightmap.uploadBytesPerTick` | `1048576` | Most pixel data sent to the GPU per client tick. |
 | `lightmap.stats` | `false` | Log work counters every five seconds. |
 
@@ -94,10 +94,18 @@ A region is 32x32 chunks and is held as one 512x512 page, one pixel per block.
    from a table indexed by block-state id, shaded by slope (land) or depth (fluid). If the recorded
    data did not change, nothing further happens; if the pixels did not change, nothing is uploaded.
 3. **Upload, client thread, once per tick.** Changed 16x16 tiles are merged into rectangles and
-   written into the page's texture through the game's normal texture write, within a byte budget.
-   A page's first upload is the whole page.
-4. **Draw.** The minimap and the world map draw the same page textures as quads in the game's GUI
-   pass: no off-screen target, no extra render pass, no shader of its own. Rotation and zoom are
+   written into the page's slot of an atlas texture through the game's normal texture write,
+   within a byte budget. A page's first upload is the whole page. An atlas is 2048x2048: fifteen
+   512x512 page slots and one slot holding a small patch of white. A new page takes the first free
+   slot, so the pages in use stay together on the first atlas; an atlas with no page left is
+   closed.
+4. **Draw.** The minimap and the world map draw the same pages as quads in the game's GUI pass:
+   no off-screen target, no extra render pass, no shader of its own. The GUI renderer starts a new
+   draw call whenever the texture, the pipeline or the clip rectangle changes between two quads.
+   Because pages share an atlas, and the flat-coloured quads (blank regions, markers, the arrow)
+   sample the atlas's white patch instead of going untextured, the whole minimap is one draw call
+   (two if the pages in view straddle two atlases). Smoothed pages are sampled half a texel
+   inside their slot so the neighbouring slot never bleeds in. Rotation and zoom are
    applied to the quad corners and the GUI scissor cuts the minimap to its square. Each region in
    view is drawn once, as its page or as a blank square, so nothing overlaps and opacity is just
    the alpha of the quads' colour. The quads are reused render states, so a frame allocates
