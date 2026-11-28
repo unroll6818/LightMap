@@ -32,13 +32,19 @@ Releases are built by GitHub Actions: every push to `main` is built and tested, 
 - **World map:** `M` opens and closes it. Hold the left or middle mouse button and drag to move the
   map; scroll to zoom about the pointer.
 - **Markers:** right-click the world map to put a named marker on that block. The dialog has a
-  name, "Show on the minimap too" (without it the marker is on the world map only) and "Show its
-  name on the minimap". Right-click a marker to change any of that or delete it; left-click a
-  marker to remove it straight away. On the world map a marker is a yellow square with its name
-  above. On the minimap it is the square, larger and outlined in the "distinct" style or small and
-  plain otherwise, with its name above only if that box was ticked. Markers are kept per world
-  and dimension in `<game dir>/lightmap/<world>/<dimension>/markers.txt` (in memory only with
+  name, a row of nine colours, "Show on the minimap too" (without it the marker is on the world map
+  only) and "Show its name on the minimap". Right-click a marker to change any of that or delete
+  it; left-click a marker to remove it straight away. On the world map a marker is a square in its
+  colour with its name above. On the minimap it is the square in the size chosen in the settings
+  (small and plain, or medium or large with a dark outline), with its name above only if that box
+  was ticked. Markers are kept per world and dimension in
+  `<game dir>/lightmap/<world>/<dimension>/markers.txt` (in memory only with
   `lightmap.persist=false`).
+- **Other players:** off by default. When switched on in the settings, every other player the
+  server has told the client about is shown on the minimap as their face, their name or both,
+  whether or not they are sneaking or invisible. Players the server does not send (out of its
+  tracking range, or hidden by a server plugin) cannot be shown. Many servers have rules about
+  this kind of feature.
 - **Settings:** with Sodium installed, Video Settings has a "LightMap" section with a Minimap page.
   Changes apply when you press Apply; none needs a restart.
 
@@ -52,7 +58,9 @@ Changed in the game and kept in `config/lightmap.properties`:
 | Opacity | `lightmap.minimap.opacity` | `100` | 0 to 100 percent, in steps of 5 in the screen. At 0 nothing is drawn. |
 | Size | `lightmap.minimap.size` | `368` | Side of the square, in screen pixels (not GUI-scaled), 64 to 1024. |
 | Rotate with view | `lightmap.minimap.rotate` | `true` | View direction up. Off is north up. |
-| Distinct markers | `lightmap.minimap.markers.distinct` | `true` | Minimap markers 8 px with a dark outline. Off is 6 px, plain. |
+| Marker size | `lightmap.minimap.markers.size` | `medium` | `small`: 6 px, plain. `medium`: 8 px with a dark outline. `large`: 12 px with a dark outline. |
+| Label size | `lightmap.minimap.labels.scale` | `100` | Size of marker names and player names on the minimap, 50 to 300 percent of the game's text size. |
+| Other players | `lightmap.minimap.players` | `off` | `off`, `heads`, `names` or `both`. |
 
 A JVM system property with the same key wins over the file, is never written back to it, and
 shows the control locked. That is how an mcbench run pins a value (`sysprops`).
@@ -95,12 +103,18 @@ A region is 32x32 chunks and is held as one 512x512 page, one pixel per block.
    the alpha of the quads' colour. The quads are reused render states, so a frame allocates
    nothing of ours.
 5. **Markers.** Drawn as one more small quad each in the same pass, from a list that is replaced
-   rather than changed, so a frame walks it without a lock or allocation. Names go through the game's own text
-   drawing, which allocates a little per name per frame: on the world map always, on the minimap
-   only for markers in view whose name was asked for. The distinct style is a second, dark quad
-   under each marker. The list is read on the worker when the world is entered
-   and written on the worker each time a marker is added, changed or removed.
-6. **Save and load, worker thread.** A page is written ten seconds after it changes and when the
+   rather than changed, so a frame walks it without a lock or allocation. The outline of the medium
+   and large sizes is a second, dark quad under each marker. Names on the world map go through the
+   game's own text drawing. The list is read on the worker when the world is entered and written
+   on the worker each time a marker is added, changed or removed.
+6. **Names and players on the minimap.** Marker names and other players' faces and names go
+   through the game's own text and texture drawing, which allocates a little per item per frame.
+   That pass runs only when a marker in view has its name switched on or the players setting is
+   on. Players are read from the client level's player list once per frame while the setting is
+   on: the one place the map looks at the world instead of waiting for an event, since positions
+   change every frame. Everything in this pass is placed through the pose matrix at its exact
+   fractional position, so a label moves with its marker instead of hopping in whole GUI units.
+7. **Save and load, worker thread.** A page is written ten seconds after it changes and when the
    world is left, and dropped from memory thirty seconds after it was last drawn or changed.
    Regions recorded earlier load from disk when they come into view. Files store block state (by
    name), height and fluid depth, not colours, so the picture follows later changes to colouring.

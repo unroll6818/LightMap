@@ -1,5 +1,6 @@
 package dev.lightmap.mc;
 
+import com.mojang.authlib.GameProfile;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.platform.Window;
 import dev.lightmap.LightMapClient;
@@ -21,12 +22,16 @@ import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.player.AbstractClientPlayer;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.player.RemotePlayer;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.state.gui.GuiElementRenderState;
 import net.minecraft.client.renderer.state.gui.GuiRenderState;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Marker;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
@@ -37,6 +42,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.UUID;
 import java.util.Set;
 
 /**
@@ -52,6 +58,8 @@ final class ScreenTests {
     private static final double CAMERA_Z = -50.25;
     private static final float YAW = 30f;
     private static final int GUI_SCALE = 2;
+    /** The default marker colour. */
+    private static final int YELLOW = 0xFF000000 | Markers.COLORS[0];
 
     private ScreenTests() {
     }
@@ -110,6 +118,7 @@ final class ScreenTests {
             minimap(session);
             worldMap(session);
             List<Markers.Marker> placed = markers(session);
+            players(session);
 
             // Leaving the world frees the textures and saves the map under the game directory.
             session.close();
@@ -378,11 +387,11 @@ final class ScreenTests {
         screen.init();
         Check.eq(6, draw(screen).size(), "no markers yet: background, four pages and the arrow");
         // The first checks use the small plain style; the distinct one has its own below.
-        Settings.setDistinctMarkers(false);
+        Settings.setMarkerSize(Settings.MarkerSize.SMALL);
         try {
             return markers(session, screen);
         } finally {
-            Settings.setDistinctMarkers(true);
+            Settings.setMarkerSize(Settings.MarkerSize.MEDIUM);
         }
     }
 
@@ -411,7 +420,7 @@ final class ScreenTests {
         GameTests.Vertices dot = vertices(drawn.get(5));
         GameTests.vertex(dot.list.get(0), wx - 2, wy - 2, Float.NaN, Float.NaN, "world map marker, top-left corner");
         GameTests.vertex(dot.list.get(2), wx + 2, wy + 2, Float.NaN, Float.NaN, "world map marker, bottom-right corner");
-        Check.eq(MinimapHud.PLACED_MARKER, dot.color, "world map marker colour");
+        Check.eq(YELLOW, dot.color, "world map marker colour");
         Check.that(dot.turn() < 0, "world map marker faces the viewer");
 
         // On the minimap: the same block, turned with the view and cut to the square.
@@ -428,13 +437,13 @@ final class ScreenTests {
         GameTests.vertex(vertices(drawn.get(5)).list.get(0), 97f, 93f, Float.NaN, Float.NaN, "the arrow still comes last, on top");
         try {
             Settings.setOpacity(40);
-            Check.eq(0x66000000 | (MinimapHud.PLACED_MARKER & 0xFFFFFF), vertices(draw(hud).get(4)).color, "minimap marker follows the opacity");
+            Check.eq(0x66000000 | (YELLOW & 0xFFFFFF), vertices(draw(hud).get(4)).color, "minimap marker follows the opacity");
         } finally {
             Settings.setOpacity(100);
         }
 
         // The distinct style: a larger square on a dark, slightly larger one.
-        Settings.setDistinctMarkers(true);
+        Settings.setMarkerSize(Settings.MarkerSize.MEDIUM);
         try {
             drawn = draw(hud);
             Check.eq(7, drawn.size(), "distinct: four pages, outline, marker and the arrow");
@@ -443,14 +452,48 @@ final class ScreenTests {
             Check.eq(MinimapHud.MARKER_OUTLINE, edge.color, "distinct: outline colour");
             GameTests.Vertices inner = vertices(drawn.get(5));
             GameTests.vertex(inner.list.get(0), mx - 2f, my - 2f, Float.NaN, Float.NaN, "distinct: marker is 8 screen pixels wide, drawn over the outline");
-            Check.eq(MinimapHud.PLACED_MARKER, inner.color, "distinct: marker colour");
+            Check.eq(YELLOW, inner.color, "distinct: marker colour");
             Check.eq(new ScreenRectangle(5, 5, 184, 184), drawn.get(4).scissorArea(), "distinct: outline is clipped to the square");
         } finally {
-            Settings.setDistinctMarkers(false);
+            Settings.setMarkerSize(Settings.MarkerSize.SMALL);
         }
 
+        // Large: bigger again, still outlined.
+        Settings.setMarkerSize(Settings.MarkerSize.LARGE);
+        try {
+            drawn = draw(hud);
+            Check.eq(7, drawn.size(), "large: four pages, outline, marker and the arrow");
+            GameTests.vertex(vertices(drawn.get(4)).list.get(0), mx - 3.5f, my - 3.5f, Float.NaN, Float.NaN, "large: outline is 14 screen pixels wide");
+            GameTests.vertex(vertices(drawn.get(5)).list.get(0), mx - 3f, my - 3f, Float.NaN, Float.NaN, "large: marker is 12 screen pixels wide");
+            GameTests.vertex(vertices(drawn.get(5)).list.get(2), mx + 3f, my + 3f, Float.NaN, Float.NaN, "large: marker, opposite corner");
+        } finally {
+            Settings.setMarkerSize(Settings.MarkerSize.SMALL);
+        }
+
+        // A colour picked in the dialog is stored and used on both maps.
+        dialog = screen.markerDialog(click(wx, wy, InputConstants.MOUSE_BUTTON_RIGHT));
+        Check.eq(0, GameTests.get(MarkerScreen.class, dialog, "color"), "the dialog opens on the marker's colour");
+        GameTests.set(MarkerScreen.class, dialog, "color", 5);
+        dialog.commit();
+        Check.eq(new Markers.Marker(140, -91, "Home", true, false, 5), session.markers.all()[0], "picked colour is stored");
+        int blue = 0xFF000000 | Markers.COLORS[5];
+        Check.eq(blue, vertices(draw(screen).get(5)).color, "world map draws the marker in its colour");
+        Check.eq(blue, vertices(draw(hud).get(4)).color, "so does the minimap");
+        try {
+            Settings.setOpacity(40);
+            Check.eq(0x66000000 | Markers.COLORS[5], vertices(draw(hud).get(4)).color, "and the colour follows the opacity");
+        } finally {
+            Settings.setOpacity(100);
+        }
+        dialog = screen.markerDialog(click(wx, wy, InputConstants.MOUSE_BUTTON_RIGHT));
+        Check.eq(5, GameTests.get(MarkerScreen.class, dialog, "color"), "the dialog reopens on the stored colour");
+        GameTests.set(MarkerScreen.class, dialog, "color", 0);
+        dialog.commit();
+        Check.eq(home, session.markers.all()[0], "back to yellow");
+
         // The name on the minimap is a choice per marker, off unless ticked, and only for a marker
-        // that is on the minimap. The text itself needs a font, so only the decision is checked.
+        // that is on the minimap. Drawing text needs a font, so what is checked is what the
+        // minimap asks to have drawn, and where.
         Check.that(!home.nameOnMinimap() && !namesInView(hud), "no name on the minimap unless asked for");
         dialog = screen.markerDialog(click(wx, wy, InputConstants.MOUSE_BUTTON_RIGHT));
         GameTests.set(MarkerScreen.class, dialog, "nameOnMinimap", true);
@@ -459,6 +502,27 @@ final class ScreenTests {
         Check.eq(home, session.markers.all()[0], "ticking the second box stores it");
         draw(hud);
         Check.that(namesInView(hud), "and the minimap draws that marker's name");
+        // The label is placed at the marker's exact position, not rounded to whole GUI units:
+        // rounding made it hop while the marker glided, which looked like the label trailing.
+        Recorder labels = new Recorder();
+        hud.overlay(labels);
+        Check.eq(1, labels.items.size(), "one label");
+        labels.expect(0, "label", "Home", mx, my - 1.5f - 1f, 1f, -1, "name sits 2 pixels above the small marker, centred on it, unrounded");
+        Check.that(mx != Math.round(mx) && (my - 2.5f) != Math.round(my - 2.5f), "which is a fractional position here (" + mx + ", " + (my - 2.5f) + ")");
+        try {
+            Settings.setLabelScale(150);
+            Settings.setMarkerSize(Settings.MarkerSize.LARGE);
+            Settings.setOpacity(40);
+            draw(hud);
+            labels = new Recorder();
+            hud.overlay(labels);
+            labels.expect(0, "label", "Home", mx, my - 3f - 1f, 1.5f, 0x66FFFFFF, "label size, marker size and opacity all apply");
+        } finally {
+            Settings.setLabelScale(100);
+            Settings.setMarkerSize(Settings.MarkerSize.SMALL);
+            Settings.setOpacity(100);
+        }
+        draw(hud);
         try {
             Settings.setMinimap(false);
             draw(hud);
@@ -556,6 +620,113 @@ final class ScreenTests {
                 session.markers.all().length, nanos / (double) frames, perFrame);
         Check.that(perFrame < 400, "markers add no allocation to a minimap frame (" + Math.round(perFrame) + " bytes)");
         return List.of(session.markers.all());
+    }
+
+    // ------------------------------------------------------------------ other players
+
+    /** Other players on the minimap: who is shown, where, and in which form. */
+    private static void players(MapSession session) throws Exception {
+        Minecraft minecraft = Minecraft.getInstance();
+        List<AbstractClientPlayer> list = new ArrayList<>();
+        GameTests.set(ClientLevel.class, session.level, "players", list);
+        // The player at this client, in the list like everyone else; a player nearby whose last
+        // tick position differs from the current one; one beyond the minimap's edge.
+        LocalPlayer self = player(LocalPlayer.class, "Me", CAMERA_X, CAMERA_Z, CAMERA_X, CAMERA_Z);
+        RemotePlayer alex = player(RemotePlayer.class, "Alex", CAMERA_X + 60, CAMERA_Z - 30, CAMERA_X + 61, CAMERA_Z - 30);
+        RemotePlayer far = player(RemotePlayer.class, "Far", CAMERA_X + 400, CAMERA_Z, CAMERA_X + 400, CAMERA_Z);
+        list.add(self);
+        list.add(alex);
+        list.add(far);
+        GameTests.set(Minecraft.class, minecraft, "player", self);
+
+        double angle = Math.PI - Math.toRadians(YAW);
+        double dx = 60 * 0.5;
+        double dz = -30 * 0.5;
+        float ax = (float) (97 + dx * Math.cos(angle) - dz * Math.sin(angle));
+        float ay = (float) (97 + dx * Math.sin(angle) + dz * Math.cos(angle));
+
+        MinimapHud hud = new MinimapHud();
+        try {
+            int quads = draw(hud).size();
+            Recorder out = new Recorder();
+            hud.overlay(out);
+            Check.eq(0, out.items.size(), "off by default: nothing drawn for players");
+
+            Settings.setPlayers(Settings.Players.HEADS);
+            Check.eq(quads, draw(hud).size(), "players add none of our own quads");
+            out = new Recorder();
+            hud.overlay(out);
+            Check.eq(1, out.items.size(), "faces: one item, for the one other player in view; not for oneself, not for the far one");
+            out.expect(0, "face", alex, ax, ay, 8f, -1, "face centred on the player's current position, 16 screen pixels wide");
+
+            Settings.setPlayers(Settings.Players.NAMES);
+            draw(hud);
+            out = new Recorder();
+            hud.overlay(out);
+            Check.eq(1, out.items.size(), "names: one item");
+            out.expect(0, "label", "Alex", ax, ay + 4.5f, 1f, -1, "name alone is centred on the player");
+
+            Settings.setPlayers(Settings.Players.BOTH);
+            Settings.setLabelScale(200);
+            Settings.setOpacity(40);
+            draw(hud);
+            out = new Recorder();
+            hud.overlay(out);
+            Check.eq(2, out.items.size(), "faces and names: two items");
+            out.expect(0, "face", alex, ax, ay, 8f, 0x66FFFFFF, "face follows the opacity");
+            out.expect(1, "label", "Alex", ax, ay - 4f - 0.5f, 2f, 0x66FFFFFF, "name sits just above the face, at the label size");
+            Settings.setLabelScale(100);
+            Settings.setOpacity(100);
+
+            // A player moved out of the square is dropped; the camera's own entity never shows.
+            GameTests.set(Entity.class, alex, "position", new Vec3(CAMERA_X + 400, 80, CAMERA_Z));
+            draw(hud);
+            out = new Recorder();
+            hud.overlay(out);
+            Check.eq(0, out.items.size(), "a player outside the square is not drawn");
+        } finally {
+            Settings.setPlayers(Settings.Players.OFF);
+            Settings.setLabelScale(100);
+            Settings.setOpacity(100);
+            list.clear();
+            GameTests.set(Minecraft.class, minecraft, "player", null);
+        }
+    }
+
+    /** A player object with only a name and a position; {@code lastX/lastZ} is where it was a tick ago. */
+    private static <T extends AbstractClientPlayer> T player(Class<T> type, String name, double x, double z, double lastX, double lastZ) throws Exception {
+        T player = bare(type);
+        GameTests.set(Player.class, player, "gameProfile", new GameProfile(UUID.nameUUIDFromBytes(name.getBytes()), name));
+        GameTests.set(Entity.class, player, "position", new Vec3(x, 80, z));
+        player.xo = lastX;
+        player.zo = lastZ;
+        return player;
+    }
+
+    /** Stands in for the game's text and texture drawing and notes what was asked of it. */
+    private static final class Recorder implements MinimapHud.Overlay {
+        final List<Object[]> items = new ArrayList<>();
+
+        @Override
+        public void label(String text, float x, float bottom, float scale, int argb) {
+            items.add(new Object[] {"label", text, x, bottom, scale, argb});
+        }
+
+        @Override
+        public void face(AbstractClientPlayer player, float x, float y, float size, int argb) {
+            items.add(new Object[] {"face", player, x, y, size, argb});
+        }
+
+        void expect(int index, String kind, Object subject, float x, float y, float size, int argb, String what) {
+            Object[] item = items.get(index);
+            Check.eq(kind, item[0], what + " (kind)");
+            // Players are compared by identity: a bare player object has no entity id to compare by.
+            Check.that(subject == item[1] || subject instanceof String && subject.equals(item[1]), what + " (subject)");
+            Check.near(x, (float) item[2], 2e-3, what + " (x)");
+            Check.near(y, (float) item[3], 2e-3, what + " (y)");
+            Check.near(size, (float) item[4], 1e-6, what + " (size)");
+            Check.eq(argb, item[5], what + " (colour)");
+        }
     }
 
     private static boolean namesInView(MinimapHud hud) throws Exception {

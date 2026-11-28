@@ -16,7 +16,18 @@
   "lightmap.marker.name": "Name",
   "lightmap.marker.minimap": "Show on the minimap too",
   "lightmap.marker.delete": "Delete",
-  "lightmap.options.minimap.distinct_markers": "Distinct markers",
-  "lightmap.options.minimap.distinct_markers.tooltip": "Draws markers on the minimap larger and with a dark outline. Off draws them small and plain.",
-  "lightmap.marker.minimap_name": "Show its name on the minimap"
+  "lightmap.marker.minimap_name": "Show its name on the minimap",
+  "lightmap.options.minimap.marker_size": "Marker size",
+  "lightmap.options.minimap.marker_size.tooltip": "How markers are drawn on the minimap. Small is a plain square; Medium and Large are bigger and have a dark outline.",
+  "lightmap.options.minimap.marker_size.small": "Small",
+  "lightmap.options.minimap.marker_size.medium": "Medium",
+  "lightmap.options.minimap.marker_size.large": "Large",
+  "lightmap.options.minimap.label_scale": "Label size",
+  "lightmap.options.minimap.label_scale.tooltip": "Size of marker names and player names on the minimap.",
+  "lightmap.options.minimap.players": "Other players",
+  "lightmap.options.minimap.players.tooltip": "Shows other players on the minimap as their face, their name or both, for every player the server has told your game about, including sneaking and invisible ones. Check a server's rules before using it there.",
+  "lightmap.options.minimap.players.off": "Off",
+  "lightmap.options.minimap.players.heads": "Faces",
+  "lightmap.options.minimap.players.names": "Names",
+  "lightmap.options.minimap.players.both": "Faces and names"
 }

@@ -661,18 +661,25 @@ public final class CoreTests {
         Check.eq(List.of(new Markers.Marker(1, 2, "Good", true), new Markers.Marker(7, 8, "Also\tgood", false)),
                 Markers.decode(damaged.getBytes(java.nio.charset.StandardCharsets.UTF_8)), "damaged lines are skipped");
 
-        // Version 2 adds "name on the minimap" as a second flag bit; version 1 files still read.
-        Markers.Marker named = new Markers.Marker(9, 10, "Named", true, true);
-        byte[] v2 = Markers.encode(new Markers.Marker[] {home, named, odd});
-        Check.that(new String(v2, java.nio.charset.StandardCharsets.UTF_8).startsWith("lightmap-markers 2\n-120\t340\t1\tHome\n9\t10\t3\tNamed\n"), "written as version 2 with both flags");
-        Check.eq(List.of(home, named, odd), Markers.decode(v2), "both flags survive a round trip");
+        // Version 3 adds a colour; version 2 added "name on the minimap" as a second flag bit.
+        // Both older versions still read.
+        Markers.Marker named = new Markers.Marker(9, 10, "Named", true, true, 5);
+        byte[] v3 = Markers.encode(new Markers.Marker[] {home, named, odd});
+        Check.that(new String(v3, java.nio.charset.StandardCharsets.UTF_8).startsWith("lightmap-markers 3\n-120\t340\t1\t0\tHome\n9\t10\t3\t5\tNamed\n"), "written as version 3 with flags and colour");
+        Check.eq(List.of(home, named, odd), Markers.decode(v3), "flags and colour survive a round trip");
+        Check.eq(0xFF000000 | Markers.COLORS[5], named.argb(), "a marker's colour comes from the palette");
+        Check.eq(0xFF000000 | Markers.COLORS[0], new Markers.Marker(0, 0, "x", true, false, 99).argb(), "an index outside the palette is the default colour");
+        Check.eq(9, Markers.COLORS.length, "nine colours to pick from");
+        String v3odd = "lightmap-markers 3\n1\t2\t1\t40\tFrom a newer palette\n3\t4\t1\tx\tBad colour\n5\t6\t1\tToo few fields\n7\t8\t0\t8\tTab\tin name\n";
+        Check.eq(List.of(new Markers.Marker(1, 2, "From a newer palette", true, false, 0), new Markers.Marker(7, 8, "Tab\tin name", false, false, 8)),
+                Markers.decode(v3odd.getBytes(java.nio.charset.StandardCharsets.UTF_8)), "unknown colour becomes the default; damaged lines are skipped");
+        String v2 = "lightmap-markers 2\n1\t2\t3\tOld\n3\t4\t4\tBad flag\n5\t6\t11\tBad flag\n7\t8\t2\tName only\n";
+        Check.eq(List.of(new Markers.Marker(1, 2, "Old", true, true), new Markers.Marker(7, 8, "Name only", false, true)),
+                Markers.decode(v2.getBytes(java.nio.charset.StandardCharsets.UTF_8)), "a version 2 file reads, in the default colour");
         String v1 = "lightmap-markers 1\n1\t2\t1\tOld\n3\t4\t3\tNot a version 1 flag\n";
         Check.eq(List.of(new Markers.Marker(1, 2, "Old", true, false)), Markers.decode(v1.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
                 "a version 1 file reads, with no names on the minimap");
-        String flags = "lightmap-markers 2\n1\t2\t2\tName only\n3\t4\t4\tBad flag\n5\t6\t11\tBad flag\n";
-        Check.eq(List.of(new Markers.Marker(1, 2, "Name only", false, true)), Markers.decode(flags.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
-                "flags outside 0 to 3 are damaged lines");
-        for (String foreign : new String[] {"", "lightmap-markers 3\n1\t2\t1\tA\n", "hello\n"}) {
+        for (String foreign : new String[] {"", "lightmap-markers 4\n1\t2\t1\t0\tA\n", "hello\n"}) {
             boolean refused = false;
             try {
                 Markers.decode(foreign.getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -714,13 +721,38 @@ public final class CoreTests {
             Check.eq(35, Settings.opacity(), "opacity survives a reload");
             Check.eq(256, Settings.size(), "size survives a reload");
             Check.that(!Settings.rotate() && !Settings.minimap(), "switches survive a reload");
-            Check.that(Settings.distinctMarkers(), "markers are distinct by default");
-            Settings.setDistinctMarkers(false);
+            Check.eq(Settings.MarkerSize.MEDIUM, Settings.markerSize(), "markers are medium by default");
+            Check.eq(100, Settings.labelScale(), "labels are normal size by default");
+            Check.eq(Settings.Players.OFF, Settings.players(), "other players are not shown by default");
+            Settings.setMarkerSize(Settings.MarkerSize.LARGE);
+            Settings.setLabelScale(175);
+            Settings.setPlayers(Settings.Players.BOTH);
             Settings.save();
-            Settings.setDistinctMarkers(true);
+            Settings.setMarkerSize(Settings.MarkerSize.MEDIUM);
+            Settings.setLabelScale(100);
+            Settings.setPlayers(Settings.Players.OFF);
             Settings.load(file);
-            Check.that(!Settings.distinctMarkers(), "the marker style survives a reload");
-            Settings.setDistinctMarkers(true);
+            Check.eq(Settings.MarkerSize.LARGE, Settings.markerSize(), "the marker size survives a reload");
+            Check.eq(175, Settings.labelScale(), "the label size survives a reload");
+            Check.eq(Settings.Players.BOTH, Settings.players(), "the players choice survives a reload");
+            Check.that(Settings.players().heads() && Settings.players().names() && !Settings.Players.NAMES.heads() && !Settings.Players.HEADS.names(), "what each players choice shows");
+            Settings.setLabelScale(5);
+            Check.eq(Settings.LABEL_SCALE_MIN, Settings.labelScale(), "label size has a lower limit");
+            Settings.setLabelScale(5000);
+            Check.eq(Settings.LABEL_SCALE_MAX, Settings.labelScale(), "and an upper one");
+
+            // Version 0.4 had an on/off "distinct markers" switch: off was the small style.
+            Files.writeString(file, "lightmap.minimap.markers.distinct=false\n");
+            Settings.load(file);
+            Check.eq(Settings.MarkerSize.SMALL, Settings.markerSize(), "0.4's 'distinct off' becomes small");
+            Files.writeString(file, "lightmap.minimap.markers.distinct=false\nlightmap.minimap.markers.size=large\nlightmap.minimap.players=Names\n");
+            Settings.load(file);
+            Check.eq(Settings.MarkerSize.LARGE, Settings.markerSize(), "the new key wins over the old one");
+            Check.eq(Settings.Players.NAMES, Settings.players(), "choices are read whatever their case");
+            Files.writeString(file, "lightmap.minimap.markers.size=huge\nlightmap.minimap.players=everyone\n");
+            Settings.load(file);
+            Check.eq(Settings.MarkerSize.MEDIUM, Settings.markerSize(), "an unknown size falls back to the default");
+            Check.eq(Settings.Players.OFF, Settings.players(), "an unknown players choice falls back to off");
 
             Files.writeString(file, "lightmap.minimap.opacity=lots\nlightmap.minimap.size=99999\nlightmap.minimap=maybe\n");
             Settings.load(file);

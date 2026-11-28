@@ -7,6 +7,8 @@ import net.caffeinemc.mods.sodium.api.config.structure.ConfigBuilder;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 
+import java.util.Locale;
+
 /**
  * LightMap's page in the video settings screen, which Sodium replaces with its own. Sodium finds
  * this class through the {@code sodium:config_api_user} entry in fabric.mod.json and only then
@@ -56,13 +58,33 @@ public final class SodiumOptions implements ConfigEntryPoint {
                                         .setBinding(Settings::setRotate, Settings::rotate)
                                         .setDefaultValue(true)
                                         .setEnabled(!Settings.pinned(Settings.ROTATE)))
-                                .addOption(builder.createBooleanOption(id("minimap.distinct_markers"))
-                                        .setName(Component.translatable("lightmap.options.minimap.distinct_markers"))
-                                        .setTooltip(Component.translatable("lightmap.options.minimap.distinct_markers.tooltip"))
+                                .addOption(builder.createEnumOption(id("minimap.marker_size"), Settings.MarkerSize.class)
+                                        .setName(Component.translatable("lightmap.options.minimap.marker_size"))
+                                        .setTooltip(Component.translatable("lightmap.options.minimap.marker_size.tooltip"))
                                         .setStorageHandler(save)
-                                        .setBinding(Settings::setDistinctMarkers, Settings::distinctMarkers)
-                                        .setDefaultValue(true)
-                                        .setEnabled(!Settings.pinned(Settings.DISTINCT_MARKERS)))));
+                                        .setBinding(Settings::setMarkerSize, Settings::markerSize)
+                                        .setElementNameProvider(value -> Component.translatable(
+                                                "lightmap.options.minimap.marker_size." + value.name().toLowerCase(Locale.ROOT)))
+                                        .setDefaultValue(Settings.MarkerSize.MEDIUM)
+                                        .setEnabled(!Settings.pinned(Settings.MARKER_SIZE)))
+                                .addOption(builder.createIntegerOption(id("minimap.label_scale"))
+                                        .setName(Component.translatable("lightmap.options.minimap.label_scale"))
+                                        .setTooltip(Component.translatable("lightmap.options.minimap.label_scale.tooltip"))
+                                        .setStorageHandler(save)
+                                        .setBinding(Settings::setLabelScale, Settings::labelScale)
+                                        .setRange(Settings.LABEL_SCALE_MIN, Settings.LABEL_SCALE_MAX, Settings.LABEL_SCALE_STEP)
+                                        .setValueFormatter(value -> Component.literal(value + "%"))
+                                        .setDefaultValue(100)
+                                        .setEnabled(!Settings.pinned(Settings.LABEL_SCALE)))
+                                .addOption(builder.createEnumOption(id("minimap.players"), Settings.Players.class)
+                                        .setName(Component.translatable("lightmap.options.minimap.players"))
+                                        .setTooltip(Component.translatable("lightmap.options.minimap.players.tooltip"))
+                                        .setStorageHandler(save)
+                                        .setBinding(Settings::setPlayers, Settings::players)
+                                        .setElementNameProvider(value -> Component.translatable(
+                                                "lightmap.options.minimap.players." + value.name().toLowerCase(Locale.ROOT)))
+                                        .setDefaultValue(Settings.Players.OFF)
+                                        .setEnabled(!Settings.pinned(Settings.PLAYERS)))));
     }
 
     private static Identifier id(String path) {
